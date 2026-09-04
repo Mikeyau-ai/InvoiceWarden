@@ -3,6 +3,30 @@
 All notable changes to InvoiceM8. Newest first. Bump `version.py` and add an
 entry here for every release.
 
+## 1.0.40
+- **Fixed: "Test AI" always failed with `'sender'`.** The button never
+  actually reached the AI provider - it crashed building the test prompt
+  because a `{sender}` field added to the prompt earlier was not being filled
+  in on this path. It now sends the test invoice properly. (A test locks the
+  prompt fields down so this can't silently break again.)
+- **Activity Log is now a simple view by default.** It shows only outcomes -
+  invoices filed, credits linked, duplicates skipped, errors, and suppliers
+  added. The routine step-by-step chatter (email seen, parsed, polled, inline
+  signature images skipped as "not a payable document") is hidden until you
+  tick the new **Advanced** box. A successful filing is now coloured green so
+  it stands out from the warnings and noise.
+- **The Activity Log filter is live.** It filters as you type, and clearing the
+  box drops straight back to the full log - no "Search" button to press, no
+  "Clear filter" needed (the button is still there if you like it).
+- **Suppliers list: long names get room to breathe.** The list column is wider
+  and each supplier's name has its own line, with the routing summary (and the
+  NEW marker) on a quieter line below, so names like "Mate Freight Pty Ltd ATF
+  Mate Freight Business …" are no longer chopped off.
+- **"Check for updates now" tells you when the check itself failed** (no
+  internet, GitHub rate-limiting, GitHub down) instead of always saying
+  "you're up to date". The automatic check on launch is unchanged - still a
+  silent no-op when it can't reach GitHub.
+
 ## 1.0.39
 - The "Catch up…" job filter now takes a **range**, not just a floor. The
   field accepts a bare number (skip anything below it, as before), `low-high`

@@ -23,6 +23,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import core.router as router_mod                                    # noqa: E402
 from core.crypto import SecretBox                                   # noqa: E402
 from core.database import Database                                  # noqa: E402
+import core.parser_ai as parser_ai                                 # noqa: E402
 from core.parser_ai import (                                        # noqa: E402
     NON_INVOICE_KINDS,
     ParseResult,
@@ -432,6 +433,125 @@ class TestPendingQueue(TempDbCase):
                       "VALUES('t', 'Old', '')")
         self.assertEqual(self.db.repair_pending_status(), 1)
         self.assertEqual(len(self.db.list_pending()), 1)
+
+
+try:
+    import customtkinter  # noqa: F401  (app dependency; skip GUI tests without it)
+    _HAVE_CTK = True
+except Exception:
+    _HAVE_CTK = False
+
+
+@unittest.skipUnless(_HAVE_CTK, "customtkinter not importable")
+class TestActivityLogView(unittest.TestCase):
+    """The simple/advanced split and the green success colouring."""
+
+    def test_routine_chatter_is_hidden_in_simple_view(self) -> None:
+        """INFO progress lines are noise; the simple view drops them."""
+        from gui.logs_tab import is_noise_line
+
+        for action in ("found", "parsed", "poll", "cleanup", "skipped"):
+            self.assertTrue(is_noise_line("INFO", action), action)
+
+    def test_outcomes_and_warnings_always_show(self) -> None:
+        """Anything at WARN/ERROR, and every non-chatter INFO action, stays."""
+        from gui.logs_tab import is_noise_line
+
+        self.assertFalse(is_noise_line("INFO", "uploaded"))
+        self.assertFalse(is_noise_line("INFO", "new customer"))
+        self.assertFalse(is_noise_line("WARN", "duplicate"))
+        self.assertFalse(is_noise_line("WARN", "skipped"))   # user skipped a prompt
+        self.assertFalse(is_noise_line("ERROR", "error"))
+
+    def test_successful_filing_is_green(self) -> None:
+        """A completed upload/credit-link gets the SUCCESS (green) tag."""
+        from gui.logs_tab import line_tag
+
+        self.assertEqual(line_tag("INFO", "uploaded"), "SUCCESS")
+        self.assertEqual(line_tag("INFO", "credit linked"), "SUCCESS")
+        self.assertEqual(line_tag("INFO", "found"), "INFO")
+        self.assertEqual(line_tag("WARN", "duplicate"), "WARN")
+        self.assertEqual(line_tag("ERROR", "error"), "ERROR")
+
+
+class TestAiSelfTest(TempDbCase):
+    """The Settings 'Test AI' button must build its prompt without crashing."""
+
+    def test_prompt_placeholders_are_pinned(self) -> None:
+        """Every {name} in the prompt is one both call sites know to supply.
+
+        Adding a placeholder (as {sender} was) without updating the self-test
+        call site made the button raise KeyError before any network request.
+        """
+        import string
+
+        names = {f for _, f, _, _ in string.Formatter().parse(parser_ai._PROMPT) if f}
+        self.assertEqual(names, {"sender", "subject", "filenames", "body", "attachment"})
+
+    def test_self_test_builds_prompt_and_grades_the_reply(self) -> None:
+        """End to end with the network faked: no KeyError, reads the reply."""
+        self.settings.set("ai.provider", "gemini")
+        self.settings.set("ai.gemini_api_key", "test-key")
+        seen = {}
+
+        def fake_call(provider, api_key, model, prompt, base_url=""):
+            """Stand in for the provider HTTP call; capture the built prompt."""
+            seen["prompt"] = prompt
+            return ('{"customer_name": "Acme Pty Ltd", "job_number": "10160", '
+                    '"invoice_ref": "INV-1042"}')
+
+        with patch.object(parser_ai, "_call_provider", fake_call):
+            ok, detail = parser_ai.test_ai_provider(self.settings)
+
+        self.assertTrue(ok, detail)
+        self.assertIn("accounts@acme.com.au", seen["prompt"])   # {sender} filled
+
+    def test_self_test_reports_a_missing_key_cleanly(self) -> None:
+        """No key saved is a clear message, not a crash."""
+        self.settings.set("ai.provider", "gemini")
+        self.settings.set("ai.gemini_api_key", "")
+        ok, detail = parser_ai.test_ai_provider(self.settings)
+        self.assertFalse(ok)
+        self.assertIn("API key", detail)
+
+
+class TestUpdateCheckErrors(unittest.TestCase):
+    """The manual check must distinguish 'up to date' from 'could not check'."""
+
+    def test_network_failure_raises_not_silently_current(self) -> None:
+        """A dead connection raises UpdateCheckError rather than returning None."""
+        import urllib.error
+
+        from core import updater
+
+        with patch.object(updater.urllib.request, "urlopen",
+                          side_effect=urllib.error.URLError("no route to host")):
+            with self.assertRaises(updater.UpdateCheckError):
+                updater.check_now()
+
+    def test_rate_limit_message_is_explained(self) -> None:
+        """A 403 with no remaining quota is reported as rate-limiting."""
+        import urllib.error
+
+        from core import updater
+
+        err = urllib.error.HTTPError(
+            updater._API_LATEST, 403, "rate limited",
+            {"X-RateLimit-Remaining": "0"}, None)
+        with patch.object(updater.urllib.request, "urlopen", side_effect=err):
+            with self.assertRaises(updater.UpdateCheckError) as caught:
+                updater.check_now()
+        self.assertIn("rate-limiting", str(caught.exception))
+
+    def test_auto_check_stays_a_silent_no_op(self) -> None:
+        """start_check()'s path still swallows failures (no exception, no result)."""
+        import urllib.error
+
+        from core import updater
+
+        with patch.object(updater.urllib.request, "urlopen",
+                          side_effect=urllib.error.URLError("offline")):
+            self.assertIsNone(updater._fetch_latest())
 
 
 class TestSourceHygiene(unittest.TestCase):

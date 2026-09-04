@@ -200,10 +200,18 @@ class App(ctk.CTk):
 
         def work() -> None:
             """Worker thread: run the check, then hand back to Tk."""
-            info = updater.check_now()
+            try:
+                info = updater.check_now()
+                error = None
+            except updater.UpdateCheckError as exc:
+                info, error = None, str(exc)
+
             def show() -> None:
                 """Tk thread: report the outcome."""
-                if info is None:
+                if error is not None:
+                    on_result(f"Update check failed: {error}. You can still get "
+                              f"the latest version from the GitHub Releases page.")
+                elif info is None:
                     on_result(f"You're up to date (v{APP_VERSION})."
                               if updater.is_frozen()
                               else "Update check only runs in the built .exe.")

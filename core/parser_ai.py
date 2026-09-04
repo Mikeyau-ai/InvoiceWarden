@@ -613,8 +613,9 @@ def test_ai_provider(settings) -> tuple[bool, str]:
         return False, (f"{label}: no base URL set. It must point at an "
                        f"OpenAI-compatible endpoint ending in /v1.")
 
-    prompt = _PROMPT.format(subject=_TEST_SUBJECT, body=_TEST_BODY,
-                            attachment="", filenames="INV-1042_Acme.pdf")
+    prompt = _PROMPT.format(sender="accounts@acme.com.au", subject=_TEST_SUBJECT,
+                            body=_TEST_BODY, attachment="",
+                            filenames="INV-1042_Acme.pdf")
     try:
         raw = _call_provider(provider, api_key, model, prompt, base_url)
     except Exception as exc:

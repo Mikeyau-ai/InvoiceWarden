@@ -27,7 +27,9 @@ class CustomersTab:
         root.pack(fill="both", expand=True)
 
         # -- list column --
-        left = ctk.CTkFrame(root, fg_color=C["panel"], width=250)
+        # Wide enough that most supplier names fit on one line; the pathological
+        # long ones wrap onto a second line rather than being clipped.
+        left = ctk.CTkFrame(root, fg_color=C["panel"], width=300)
         left.pack(side="left", fill="y", padx=(0, 8), pady=0)
         left.pack_propagate(False)
         head = ctk.CTkFrame(left, fg_color=C["panel"])
@@ -97,20 +99,40 @@ class CustomersTab:
             text_color=C["yellow"] if unreviewed else C["dim"])
 
         for row in rows:
-            tags = []
-            if row["servicem8_enabled"]:
-                tags.append(svc_label)          # resolved once, above the loop
-            if row["accounting_enabled"]:
-                tags.append(acct_label)
-            is_new = not row["reviewed"]
-            label = (f"{'* NEW  ' if is_new else ''}{row['name']}"
-                     f"  ·  {'/'.join(tags) or 'off'}")
-            btn = ctk.CTkButton(self._list, text=label, anchor="w",
-                                fg_color=C["row"], hover_color=C["select"],
-                                text_color=C["yellow"] if is_new else C["text"],
-                                font=FONT_UI,
-                                command=lambda r=row: self._load(r["id"]))
-            btn.pack(fill="x", pady=2)
+            self._add_row(row, svc_label, acct_label)
+
+    def _add_row(self, row, svc_label: str, acct_label: str) -> None:
+        """One clickable supplier entry: full-width name, dim routing line below.
+
+        Built from a frame + two labels rather than a single CTkButton so the
+        name can have the whole column width and wrap when it must, while the
+        routing summary and NEW marker sit on a quieter second line.
+        """
+        tags = []
+        if row["servicem8_enabled"]:
+            tags.append(svc_label)
+        if row["accounting_enabled"]:
+            tags.append(acct_label)
+        is_new = not row["reviewed"]
+        routing = " / ".join(tags) or "not routed"
+        sub_text = f"NEW  ·  {routing}" if is_new else routing
+
+        card = ctk.CTkFrame(self._list, fg_color=C["row"], corner_radius=4)
+        card.pack(fill="x", pady=2)
+        name = ctk.CTkLabel(card, text=row["name"], anchor="w", justify="left",
+                            wraplength=250, font=FONT_UI,
+                            text_color=C["yellow"] if is_new else C["text"])
+        name.pack(fill="x", padx=8, pady=(5, 0))
+        sub = ctk.CTkLabel(card, text=sub_text, anchor="w", justify="left",
+                           font=("Segoe UI", 11),
+                           text_color=C["yellow"] if is_new else C["dim"])
+        sub.pack(fill="x", padx=8, pady=(0, 5))
+
+        # The frame and both labels behave as one button (click + hover).
+        for w in (card, name, sub):
+            w.bind("<Button-1>", lambda _e, cid=row["id"]: self._load(cid))
+            w.bind("<Enter>", lambda _e: card.configure(fg_color=C["select"]))
+            w.bind("<Leave>", lambda _e: card.configure(fg_color=C["row"]))
 
     # -- form ---------------------------------------------------
     def _build_form(self) -> None:

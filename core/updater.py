@@ -96,6 +96,14 @@ def auto_check_pref() -> bool:
     return bool(_state().get("update_check", True))
 
 
+class UpdateCheckError(Exception):
+    """The update check could not complete - offline, GitHub error, rate limit.
+
+    Distinct from "checked fine, already current" so the manual check can tell
+    the user their check *failed* instead of silently implying they are current.
+    """
+
+
 # -- update info ----------------------------------------------------
 @dataclass
 class UpdateInfo:
@@ -134,8 +142,23 @@ class UpdateInfo:
         return out[:15]
 
 
-def _fetch_latest() -> UpdateInfo | None:
-    """Query the Releases API. Returns None for every failure mode."""
+def _http_error_reason(exc: urllib.error.HTTPError) -> str:
+    """Short human explanation for an HTTPError from the Releases API."""
+    if exc.code == 403 and exc.headers.get("X-RateLimit-Remaining") == "0":
+        return ("GitHub is rate-limiting update checks from your network - "
+                "wait an hour, or download the update manually")
+    if exc.code == 404:
+        return "no published release was found on GitHub"
+    return f"GitHub returned an error (HTTP {exc.code})"
+
+
+def _fetch_latest(*, strict: bool = False) -> UpdateInfo | None:
+    """Query the Releases API. Returns None for every failure mode.
+
+    With ``strict=True`` a failure instead raises :class:`UpdateCheckError`
+    carrying a readable reason - used by the manual "Check now" button so a
+    network problem is not reported to the user as "you're up to date".
+    """
     req = urllib.request.Request(
         _API_LATEST,
         headers={"User-Agent": _UA, "Accept": "application/vnd.github+json"},
@@ -143,11 +166,20 @@ def _fetch_latest() -> UpdateInfo | None:
     try:
         with urllib.request.urlopen(req, timeout=_CHECK_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+    except urllib.error.HTTPError as exc:
+        if strict:
+            raise UpdateCheckError(_http_error_reason(exc)) from exc
+        return None
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
+        if strict:
+            raise UpdateCheckError(
+                "couldn't reach GitHub - check your internet connection") from exc
         return None
 
     tag = (data.get("tag_name") or "").lstrip("vV")
     if not tag:
+        if strict:
+            raise UpdateCheckError("GitHub reported no published release")
         return None
     for asset in data.get("assets") or []:
         if (asset.get("name") or "").lower() == _ASSET_NAME.lower():
@@ -157,6 +189,9 @@ def _fetch_latest() -> UpdateInfo | None:
                 size=int(asset.get("size") or 0),
                 notes=(data.get("body") or "").strip(),
             )
+    if strict:
+        raise UpdateCheckError(
+            f"the latest release (v{tag}) has no {_ASSET_NAME} attached yet")
     return None
 
 
@@ -204,8 +239,10 @@ def pending_update() -> UpdateInfo | None:
 
 def check_now() -> UpdateInfo | None:
     """Synchronous check that ignores the enabled flag - for the 'Check now'
-    button. Returns a newer release (even a skipped one) or None."""
-    info = _fetch_latest()
+    button. Returns a newer release (even a skipped one), or None if already
+    current. Raises :class:`UpdateCheckError` if the check itself could not
+    complete."""
+    info = _fetch_latest(strict=True)
     if info and info.url and _parse_version(info.version) > _parse_version(current_version()):
         return info
     return None

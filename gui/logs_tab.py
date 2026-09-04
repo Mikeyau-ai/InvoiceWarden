@@ -2,6 +2,12 @@
 
 Rows are read from ``activity_log`` in SQLite. The watcher also streams live
 lines here through the app's event queue.
+
+Two view levels:
+  * the default *simple* view shows only outcomes - uploads, skips, errors and
+    supplier changes;
+  * ticking **Advanced** also shows the routine step-by-step chatter (email
+    seen, parsed, polled, non-invoice attachments).
 """
 from __future__ import annotations
 
@@ -11,6 +17,38 @@ import customtkinter as ctk
 
 from gui.theme import C, FONT_DATA, FONT_HEAD, accent_button
 
+#: INFO-level actions that are routine progress chatter, not outcomes. Hidden
+#: in the simple view, shown when "Advanced" is ticked. A denylist, so anything
+#: at WARN/ERROR and every other INFO action (uploaded, new customer, ...) stays
+#: visible by default - a new action type shows rather than silently vanishing.
+_NOISE_ACTIONS = {"found", "parsed", "poll", "cleanup", "skipped"}
+
+#: Actions that represent a successful filing - coloured green.
+_SUCCESS_ACTIONS = {"uploaded", "credit linked"}
+
+#: Delay after the last keystroke before the live filter re-queries, in ms.
+#: Long enough to coalesce a burst of typing, short enough to feel immediate.
+_FILTER_DEBOUNCE_MS = 150
+
+
+def is_noise_line(level: str, action: str) -> bool:
+    """True for a routine-progress line that the simple view should hide."""
+    return level == "INFO" and action in _NOISE_ACTIONS
+
+
+def line_tag(level: str, action: str) -> str:
+    """Text-colour tag for one log line: SUCCESS (green) or the level name."""
+    if level == "INFO" and action in _SUCCESS_ACTIONS:
+        return "SUCCESS"
+    return level
+
+
+def format_line(ts, level, platform, customer, ref, action, filename, message) -> str:
+    """One monospaced, column-aligned log row (trailing newline included)."""
+    return (f"{ts}  {level:5}  {(platform or '-'):>12}  "
+            f"{(customer or '-'):20.20}  {(ref or '-'):12.12}  "
+            f"{action:10}  {filename:24.24}  {message}\n")
+
 
 class LogsTab:
     """Scrolling, filterable activity view backed by the DB."""
@@ -19,6 +57,7 @@ class LogsTab:
         """Build the search bar and the scrolling log textbox."""
         self._app = app
         self._db = app.db
+        self._filter_job: str | None = None
 
         root = ctk.CTkFrame(parent, fg_color=C["bg"])
         root.pack(fill="both", expand=True)
@@ -27,15 +66,21 @@ class LogsTab:
         bar.pack(fill="x", pady=(0, 6))
         ctk.CTkLabel(bar, text="Activity Log", font=FONT_HEAD,
                      text_color=C["blue"]).pack(side="left", padx=6)
-        self._search = ctk.CTkEntry(bar, width=280, placeholder_text="Search supplier / ref / platform / text")
+        self._search = ctk.CTkEntry(bar, width=280,
+                                    placeholder_text="Search supplier / ref / platform / text")
         self._search.pack(side="left", padx=6)
         self._search.bind("<Return>", lambda _e: self.refresh())
         self._search.bind("<Escape>", lambda _e: self._clear_filter())
-        accent_button(ctk, bar, "Search", self.refresh, colour=C["blue"]).pack(side="left")
+        # Live filter: re-query as the user types (debounced), and drop back to
+        # the full log automatically when the box is emptied - no button needed.
+        self._search.bind("<KeyRelease>", self._schedule_filter)
         accent_button(ctk, bar, "Clear filter", self._clear_filter,
                       colour=C["btn_off"]).pack(side="left", padx=6)
         accent_button(ctk, bar, "Clear log", self._clear_log,
                       colour=C["btn_off"]).pack(side="left")
+        # Unticked = simple view (outcomes only); ticked = every progress line.
+        self._advanced = ctk.CTkCheckBox(bar, text="Advanced", command=self.refresh)
+        self._advanced.pack(side="right", padx=6)
 
         self._box = ctk.CTkTextbox(root, font=FONT_DATA, wrap="none",
                                    fg_color=C["row"], text_color=C["text"])
@@ -45,10 +90,27 @@ class LogsTab:
         self.refresh()
 
     def _configure_tags(self) -> None:
-        """Colour lines by level (matches RamBo's issue colouring)."""
+        """Colour lines by outcome/level (matches RamBo's issue colouring)."""
         for name, colour in (("INFO", C["text"]), ("WARN", C["yellow"]),
-                             ("ERROR", C["red"])):
+                             ("ERROR", C["red"]), ("SUCCESS", C["green"])):
             self._box.tag_config(name, foreground=colour)
+
+    def _advanced_on(self) -> bool:
+        """True when the Advanced checkbox is ticked (show every line)."""
+        return bool(self._advanced.get())
+
+    # -- filter -----------------------------------------------------
+    def _schedule_filter(self, _event=None) -> None:
+        """Debounce live-filter re-queries so fast typing doesn't thrash."""
+        if self._filter_job is not None:
+            self._box.after_cancel(self._filter_job)
+        self._filter_job = self._box.after(_FILTER_DEBOUNCE_MS, self._run_filter)
+
+    def _run_filter(self) -> None:
+        """Fire the debounced filter refresh (guarded against teardown)."""
+        self._filter_job = None
+        if self._box.winfo_exists():
+            self.refresh()
 
     def _clear_filter(self) -> None:
         """Reset the search box and show all recent activity again."""
@@ -72,16 +134,19 @@ class LogsTab:
                              message=f"Activity log cleared ({removed} entries removed).")
 
     def refresh(self, *_a) -> None:
-        """Re-query the DB and repaint."""
+        """Re-query the DB and repaint, honouring the filter and view level."""
         term = self._search.get().strip()
+        advanced = self._advanced_on()
         rows = self._db.search_activity(term)
         self._box.configure(state="normal")
         self._box.delete("1.0", "end")
         for r in reversed(rows):  # oldest first
-            line = (f"{r['ts']}  {r['level']:5}  {r['platform']:>12}  "
-                    f"{(r['customer_name'] or '-'):20.20}  {(r['invoice_ref'] or '-'):12.12}  "
-                    f"{r['action']:10}  {r['filename']:24.24}  {r['message']}\n")
-            self._box.insert("end", line, r["level"])
+            if not advanced and is_noise_line(r["level"], r["action"]):
+                continue
+            line = format_line(r["ts"], r["level"], r["platform"],
+                               r["customer_name"], r["invoice_ref"],
+                               r["action"], r["filename"], r["message"])
+            self._box.insert("end", line, line_tag(r["level"], r["action"]))
         self._box.see("end")
         self._box.configure(state="disabled")
 
@@ -92,12 +157,13 @@ class LogsTab:
         if term and term not in text:
             return
         level = event.get("level", "INFO")
-        line = (f"{event.get('ts', '')}  {level:5}  {event.get('platform', '-'):>12}  "
-                f"{(event.get('customer_name') or '-'):20.20}  "
-                f"{(event.get('invoice_ref') or '-'):12.12}  "
-                f"{event.get('action', ''):10}  {event.get('filename', ''):24.24}  "
-                f"{event.get('message', '')}\n")
+        action = event.get("action", "")
+        if not self._advanced_on() and is_noise_line(level, action):
+            return
+        line = format_line(event.get("ts", ""), level, event.get("platform", "-"),
+                           event.get("customer_name"), event.get("invoice_ref"),
+                           action, event.get("filename", ""), event.get("message", ""))
         self._box.configure(state="normal")
-        self._box.insert("end", line, level)
+        self._box.insert("end", line, line_tag(level, action))
         self._box.see("end")
         self._box.configure(state="disabled")
