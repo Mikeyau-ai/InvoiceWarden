@@ -30,6 +30,18 @@ ACCOUNTING_PROVIDERS["none"] = NoneProvider
 
 ALL_PROVIDERS: dict[str, type[Provider]] = {**SERVICE_PROVIDERS, **ACCOUNTING_PROVIDERS}
 
+#: The accounting side is switched off for now (decided 2026-10-06): Xero, MYOB and
+#: QuickBooks are built but untested, and the rest are placeholders. The code stays and the
+#: router is unchanged; Settings and Suppliers just don't offer it until it's been tested.
+ACCOUNTING_ENABLED = False
+
+
+def selectable_service_providers(current: str = "") -> dict[str, type[Provider]]:
+    """Job systems offered in Settings: the built ones, plus whatever is already chosen
+    (so an existing setting never silently disappears from the dropdown)."""
+    return {k: c for k, c in SERVICE_PROVIDERS.items()
+            if k != "none" and (c.implemented or k == current)}
+
 
 def service_labels() -> dict[str, str]:
     """{key: label} in dropdown order for the Service system selector."""

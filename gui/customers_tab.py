@@ -12,7 +12,7 @@ import customtkinter as ctk
 
 from config import SUPPORTED_FILE_TYPES
 from gui.theme import C, FONT_HEAD, FONT_UI, accent_button
-from integrations.registry import label_for
+from integrations.registry import ACCOUNTING_ENABLED, label_for
 
 
 class CustomersTab:
@@ -203,6 +203,8 @@ class CustomersTab:
         if svc and svc != "none":
             self._sm8.configure(text=svc_label)
             self._sm8.pack(anchor="w", padx=12, pady=4)
+        if not ACCOUNTING_ENABLED:
+            acct = "none"
         if acct and acct != "none":
             self._acct.configure(text=acct_label)
             self._acct.pack(anchor="w", padx=12, pady=4)

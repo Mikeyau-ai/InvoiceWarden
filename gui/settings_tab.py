@@ -26,9 +26,11 @@ from gui.help_dialog import GuideWindow, HelpPopup
 from gui.theme import C, FONT_HEAD, FONT_UI, accent_button
 from integrations.email_outlook import build_backend
 from integrations.registry import (
+    ACCOUNTING_ENABLED,
     ACCOUNTING_PROVIDERS,
     SERVICE_PROVIDERS,
     build_provider,
+    selectable_service_providers,
 )
 
 #: Plain-English names for the three ways of reading mail (stored as com/graph/imap).
@@ -105,6 +107,10 @@ class _Fixed:
         """The remembered label."""
         return self._value
 
+    def set(self, value: str) -> None:
+        """Remember a new label (mirrors the dropdown's API)."""
+        self._value = value
+
 
 class SettingsTab:
     """Builds and manages the Settings tab widgets."""
@@ -169,18 +175,23 @@ class SettingsTab:
     def _build_destinations_card(self) -> None:
         """Service system and accounting system, each with its own fields."""
         body = self._card("Where invoices go",
-                          "Where filed invoices are sent. Each supplier can be switched "
-                          "on or off for each one on the Suppliers page.")
+                          "The job system filed invoices are attached to. Each supplier "
+                          "can be switched on or off on the Suppliers page.")
+        current = self._settings.get("service.provider", "servicem8")
         self._service = self._dropdown(
-            body, "Service system",
-            [c.label for c in SERVICE_PROVIDERS.values()], self._render)
+            body, "Job system",
+            [c.label for c in selectable_service_providers(current).values()], self._render)
         self._svc_box = ctk.CTkFrame(body, fg_color="transparent")
         self._svc_box.pack(fill="x")
-        self._accounting = self._dropdown(
-            body, "Accounting system",
-            [c.label for c in ACCOUNTING_PROVIDERS.values()], self._render)
         self._acct_box = ctk.CTkFrame(body, fg_color="transparent")
-        self._acct_box.pack(fill="x")
+        if ACCOUNTING_ENABLED:
+            self._accounting = self._dropdown(
+                body, "Accounting system",
+                [c.label for c in ACCOUNTING_PROVIDERS.values()], self._render)
+            self._acct_box.pack(fill="x")
+        else:
+            # Not offered for now; keeps the stored choice untouched (see _save).
+            self._accounting = _Fixed(ACCOUNTING_PROVIDERS["none"].label)
 
     def _build_ai_card(self) -> None:
         """Which AI reads the invoices, and its key."""
@@ -444,7 +455,7 @@ class SettingsTab:
                 (self._acct_box, self._accounting, ACCOUNTING_PROVIDERS, self._test_accounting)):
             key = self._provider_key(menu, table)
             cls = table[key]
-            if key == "none":
+            if key == "none" or (table is ACCOUNTING_PROVIDERS and not ACCOUNTING_ENABLED):
                 continue
             for fkey, lbl, secret in cls.setting_fields:
                 self._row(box, fkey, lbl, secret)
@@ -556,8 +567,9 @@ class SettingsTab:
             self._settings.set(key, entry.get())
         self._settings.set("service.provider",
                            self._provider_key(self._service, SERVICE_PROVIDERS))
-        self._settings.set("accounting.provider",
-                           self._provider_key(self._accounting, ACCOUNTING_PROVIDERS))
+        if ACCOUNTING_ENABLED:
+            self._settings.set("accounting.provider",
+                               self._provider_key(self._accounting, ACCOUNTING_PROVIDERS))
         self._settings.set("ai.provider", self._ai_key())
         self._settings.set("outlook.backend", self._backend_key())
         self._settings.set("watcher.poll_minutes", self._poll.get() or "5")
