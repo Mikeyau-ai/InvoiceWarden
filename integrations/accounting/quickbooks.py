@@ -44,7 +44,7 @@ class QuickBooksProvider(Provider):
             "redirect_uri": self._settings.get("qbo.redirect_uri"),
             "response_type": "code",
             "scope": self.SCOPES,
-            "state": "invoicem8",
+            "state": "invoicewarden",
         }
         url = AUTH_URL + "?" + requests.compat.urlencode(params)
         webbrowser.open(url)

@@ -1,7 +1,31 @@
 # Changelog
 
-All notable changes to InvoiceM8. Newest first. Bump `version.py` and add an
-entry here for every release.
+All notable changes to InvoiceWarden (called InvoiceM8 until 2026-10). Newest first.
+Bump `version.py` and add an entry here for every release.
+
+## Unreleased: InvoiceWarden (not published yet)
+- **New name: InvoiceWarden**, from Sixth Day Studios ("M8" clashed with ServiceM8). On first
+  start the old `%LOCALAPPDATA%\InvoiceM8` folder is copied to `%LOCALAPPDATA%\InvoiceWarden`
+  (the old one is kept as a backup), so suppliers, history, mailboxes and saved keys all carry
+  over. Saved keys stay readable: the master key keeps its old Credential Manager name. The
+  "Start with Windows" entry is renamed too. Releases ship `InvoiceWarden.exe` plus a copy
+  named `InvoiceM8.exe`, so copies still on the old version find and install the update.
+- **New main screen (Activity)**: an On/Off switch with "checked 2 min ago", Check now, tiles
+  for invoices filed today and this week, and a **Needs attention** list (problems with what
+  to do, Retry/Dismiss, new suppliers to review). The Error Log tab is folded into it. Recent
+  activity reads as plain sentences; the full technical log is behind a "Full log" switch.
+  "Catch up" is now "Go back further…".
+- **Suppliers**: only the systems you've set up are offered as "Send their invoices to";
+  IDs, file types and notes sit under "More options"; new suppliers get a note saying what to
+  check; Delete asks first.
+- **Settings as cards**: Email, Where invoices go, AI, General, and a folded Advanced section.
+  Each card has its own Test button; the mail options read in plain English; the red wall of
+  unreadable keys is gone (one line, only for keys actually in use).
+- **Setup wizard** for new installs: email (Microsoft sign-in, classic Outlook or other
+  email), ServiceM8 key and AI key, each with Test and a guide. Settings > Run setup again.
+- The accounting side (Xero, MYOB, QuickBooks) is switched off in the app for now: built but
+  untested. The job-system list only offers systems that work (ServiceM8).
+- Studio teal throughout, matching RamWarden.
 
 ## 1.0.40
 - **Fixed: "Test AI" always failed with `'sender'`.** The button never

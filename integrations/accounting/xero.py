@@ -42,7 +42,7 @@ class XeroProvider(Provider):
             "client_id": self._settings.get("xero.client_id"),
             "redirect_uri": self._settings.get("xero.redirect_uri"),
             "scope": self.SCOPES,
-            "state": "invoicem8",
+            "state": "invoicewarden",
         }
         url = AUTH_URL + "?" + requests.compat.urlencode(params)
         webbrowser.open(url)

@@ -45,7 +45,7 @@ class App(ctk.CTk):
         self._events: queue.Queue[dict] = queue.Queue()
         self._new_customers: queue.Queue[tuple[str, int]] = queue.Queue()
 
-        self.title(f"InvoiceM8  v{APP_VERSION}")
+        self.title(f"InvoiceWarden  v{APP_VERSION}")
         self.geometry("1080x720")
         self.minsize(920, 600)
         self.configure(fg_color=C["bg"])
@@ -93,7 +93,7 @@ class App(ctk.CTk):
         bar = ctk.CTkFrame(self, fg_color=C["panel"], corner_radius=0, height=54)
         bar.pack(fill="x")
         bar.pack_propagate(False)
-        wordmark = ctk.CTkLabel(bar, text="INVOICEM8", font=FONT_WORDMARK,
+        wordmark = ctk.CTkLabel(bar, text="INVOICEWARDEN", font=FONT_WORDMARK,
                                 text_color=C["teal"], cursor="hand2")
         wordmark.pack(side="left", padx=(16, 4))
         wordmark.bind("<Button-1>", lambda _e: self.open_about())
@@ -142,7 +142,7 @@ class App(ctk.CTk):
             self._settings_win.focus()
             return
         win = ctk.CTkToplevel(self)
-        win.title("InvoiceM8 - Settings")
+        win.title("InvoiceWarden - Settings")
         # Height is capped to the screen so the pinned action footer is always
         # on-screen, even on a 768px-tall laptop display.
         h = min(820, max(560, self.winfo_screenheight() - 120))

@@ -1,4 +1,4 @@
-"""SQLite persistence layer for InvoiceM8.
+"""SQLite persistence layer for InvoiceWarden.
 
 One :class:`Database` instance is shared across threads (GUI + watcher), so all
 access goes through a single connection guarded by a lock. Row factory returns
@@ -164,7 +164,7 @@ class _ClosedCursor:
 
 
 class Database:
-    """Serialized access to the InvoiceM8 SQLite file."""
+    """Serialized access to the InvoiceWarden SQLite file."""
 
     def __init__(self, path: Path) -> None:
         """Open (creating if needed) the database and apply the schema."""

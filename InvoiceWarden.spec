@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller build spec for InvoiceM8.
+"""PyInstaller build spec for InvoiceWarden.
 
-Produces a single windowed executable: dist/InvoiceM8.exe
+Produces a single windowed executable: dist/InvoiceWarden.exe
 
 Notes:
 * CustomTkinter ships theme JSON + fonts as package data - collected below.
@@ -26,7 +26,7 @@ def _bundle(pkg: str, optional: bool = False) -> None:
         try:
             __import__(pkg)
         except Exception:
-            print(f"[InvoiceM8.spec] optional package not installed, skipping: {pkg}")
+            print(f"[InvoiceWarden.spec] optional package not installed, skipping: {pkg}")
             return
     d, b, h = collect_all(pkg)
     datas.extend(d)
@@ -80,7 +80,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="InvoiceM8",
+    name="InvoiceWarden",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

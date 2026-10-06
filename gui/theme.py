@@ -1,4 +1,4 @@
-"""Visual theme for InvoiceM8 - mirrors the RamBo desktop app palette.
+"""Visual theme for InvoiceWarden - Sixth Day Studios' dark palette, shared with RamWarden.
 
 RamBo uses a hand-rolled near-black dark theme with Segoe UI / Consolas and
 flat accent buttons. We reproduce the same colours and type here on top of
@@ -147,7 +147,7 @@ def accent_button(ctk, parent, text, command, colour=None, **kw):
 
 
 def apply_icon(window) -> None:
-    """Give a window the InvoiceM8 icon (taskbar + title bar).
+    """Give a window the InvoiceWarden icon (taskbar + title bar).
 
     Same .ico PyInstaller stamps into the executable, so the taskbar icon and
     the file icon always match. Silently ignored if the asset is missing or the

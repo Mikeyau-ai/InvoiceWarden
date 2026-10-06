@@ -609,7 +609,7 @@ class SettingsTab:
                                                               text_color=colour))
 
         threading.Thread(target=worker, daemon=True,
-                         name="InvoiceM8-SettingsTest").start()
+                         name="InvoiceWarden-SettingsTest").start()
 
     def _test_service(self) -> None:
         """Check the selected Service system's credentials against its API."""

@@ -16,7 +16,7 @@ from gui.theme import C, FONT_DATA, FONT_TAGLINE, FONT_UI, FONT_WORDMARK, accent
 from gui.theme import apply_icon
 from version import APP_VERSION
 
-REPO_URL = "https://github.com/Mikeyau-ai/Invoicem8"
+REPO_URL = "https://github.com/Mikeyau-ai/InvoiceWarden"
 
 
 def _load_changelog() -> str:
@@ -41,7 +41,7 @@ class AboutWindow(ctk.CTkToplevel):
         """Build the about window and load the bundled changelog."""
         super().__init__(master)
         apply_icon(self)
-        self.title("About InvoiceM8")
+        self.title("About InvoiceWarden")
         self.geometry("560x620")
         self.configure(fg_color=C["bg"])
         self.attributes("-topmost", True)
@@ -49,7 +49,7 @@ class AboutWindow(ctk.CTkToplevel):
 
         head = ctk.CTkFrame(self, fg_color=C["panel"])
         head.pack(fill="x")
-        ctk.CTkLabel(head, text="INVOICEM8", font=FONT_WORDMARK,
+        ctk.CTkLabel(head, text="INVOICEWARDEN", font=FONT_WORDMARK,
                      text_color=C["text"]).pack(anchor="w", padx=16, pady=(12, 0))
         ctk.CTkLabel(head, text=f"v{APP_VERSION}"
                      + ("" if updater.is_frozen() else "   (running from source)"),

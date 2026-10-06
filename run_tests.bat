@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title InvoiceM8 - tests
+title InvoiceWarden - tests
 
 echo.
 echo   ##### #   # #   #  ###  ##### #### ##### #   #  ###
@@ -9,7 +9,7 @@ echo     #   ##  # #   # #   #   #   #    #    ## ## #   #
 echo     #   # # # #   # #   #   #   #    ###  # # #  ###
 echo     #   #  ## #   # #   #   #   #    #    #   # #   #
 echo   ##### #   #   #    ###  ##### #### ##### #   #  ###
-echo   test suite   github.com/Mikeyau-ai/Invoicem8
+echo   test suite   github.com/Mikeyau-ai/InvoiceWarden
 echo.
 
 python -m unittest discover -s tests -v

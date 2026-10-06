@@ -1,4 +1,4 @@
-"""InvoiceM8 entry point.
+"""InvoiceWarden entry point.
 
     python main.py              # normal launch
     python main.py --autostart  # used by the Windows "Run on startup" entry:
@@ -31,7 +31,7 @@ def _setup_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         handlers=[
-            RotatingFileHandler(LOG_DIR / "invoicem8.log", encoding="utf-8",
+            RotatingFileHandler(LOG_DIR / "invoicewarden.log", encoding="utf-8",
                                 maxBytes=2_000_000, backupCount=3),
             logging.StreamHandler(sys.stdout),
         ],
@@ -40,7 +40,12 @@ def _setup_logging() -> None:
 
 def main() -> None:
     """Build the DB/settings/theme and run the Tk event loop."""
+    # First start after the rename: bring the InvoiceM8 data across before anything opens it.
+    from core.migrate import migrate_legacy
+    moved = migrate_legacy()
     _setup_logging()
+    if moved:
+        logging.getLogger(__name__).info(moved)
     autostart = "--autostart" in sys.argv
 
     box = SecretBox()

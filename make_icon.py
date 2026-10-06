@@ -1,6 +1,6 @@
 """Generate assets/icon.ico for the exe and the window/taskbar.
 
-One source of truth for both: PyInstaller stamps this into InvoiceM8.exe and
+One source of truth for both: PyInstaller stamps this into InvoiceWarden.exe and
 the GUI calls iconbitmap() with the same file, so the taskbar and the
 executable never drift apart.
 

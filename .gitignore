@@ -10,7 +10,7 @@ env/
 build/
 dist/
 
-# Local runtime data / secrets (InvoiceM8 stores these in %LOCALAPPDATA%,
+# Local runtime data / secrets (InvoiceWarden stores these in %LOCALAPPDATA%,
 # but ignore any that land here too)
 *.sqlite3
 *.sqlite3-wal

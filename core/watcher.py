@@ -64,7 +64,7 @@ class Watcher:
         if self.running:
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="InvoiceM8-Watcher", daemon=True)
+        self._thread = threading.Thread(target=self._run, name="InvoiceWarden-Watcher", daemon=True)
         self._thread.start()
         self._on_status(True)
         self._emit(level="INFO", action="watcher", message="Watcher started.")
@@ -130,7 +130,7 @@ class Watcher:
                 if on_done:
                     on_done()
 
-        threading.Thread(target=work, name="InvoiceM8-CatchUp", daemon=True).start()
+        threading.Thread(target=work, name="InvoiceWarden-CatchUp", daemon=True).start()
 
     # -- main loop -------------------------------------------------
     def _run(self) -> None:

@@ -1,1 +1,1 @@
-"""CustomTkinter GUI package for InvoiceM8."""
+"""CustomTkinter GUI package for InvoiceWarden."""

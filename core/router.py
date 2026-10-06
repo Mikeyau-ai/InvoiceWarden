@@ -1,6 +1,6 @@
 """Decides where a parsed supplier invoice goes and performs the uploads.
 
-InvoiceM8 is an ACCOUNTS PAYABLE tool: it files invoices the business has
+InvoiceWarden is an ACCOUNTS PAYABLE tool: it files invoices the business has
 RECEIVED from its suppliers against the right job. The "customer" tables and
 columns are named from an early misreading of that and are kept for schema
 stability - everything user-facing calls them suppliers.

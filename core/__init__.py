@@ -1,1 +1,1 @@
-"""Core (non-GUI) logic for InvoiceM8."""
+"""Core (non-GUI) logic for InvoiceWarden."""

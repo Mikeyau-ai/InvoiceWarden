@@ -1,4 +1,4 @@
-"""Build dist/InvoiceM8.exe and, if you say yes, publish it as a GitHub release.
+"""Build dist/InvoiceWarden.exe and, if you say yes, publish it as a GitHub release.
 
 One script, driven by two questions. ``release.bat`` is a thin wrapper:
 
@@ -12,7 +12,7 @@ Non-interactive overrides (for scripting):
 
 The permanent download URL - also what installed builds poll for updates - is:
 
-    https://github.com/<owner>/<repo>/releases/latest/download/InvoiceM8.exe
+    https://github.com/<owner>/<repo>/releases/latest/download/InvoiceWarden.exe
 
 Bump version.py, run release.bat, answer the prompts. Publishing needs the
 GitHub CLI:  winget install GitHub.cli  &&  gh auth login
@@ -28,8 +28,11 @@ from pathlib import Path
 from core.updater import GITHUB_REPO
 from version import APP_VERSION
 
-EXE = Path("dist/InvoiceM8.exe")
-SPEC = "InvoiceM8.spec"
+EXE = Path("dist/InvoiceWarden.exe")
+#: The same build under the app's old name. Copies still on InvoiceM8 only look for an
+#: asset with this name, so every release carries it until those have all updated.
+LEGACY_EXE = Path("dist/InvoiceM8.exe")
+SPEC = "InvoiceWarden.spec"
 
 
 def gh(*args: str) -> subprocess.CompletedProcess:
@@ -46,7 +49,7 @@ def build() -> bool:
     Build from a venv with the full requirements.txt installed to bake in the
     AI / Graph / attachment features (the spec skips any that are missing).
     """
-    print("  Building dist/InvoiceM8.exe ...")
+    print("  Building dist/InvoiceWarden.exe ...")
     for stale in ("build", "dist"):
         shutil.rmtree(stale, ignore_errors=True)
     if subprocess.run([sys.executable, "-m", "pip", "install", "-q",
@@ -138,7 +141,7 @@ def main() -> int:
     elif assume_yes or build_only:
         do_build = True
     else:
-        do_build = _ask("\n  Build a fresh InvoiceM8.exe?", default=True)
+        do_build = _ask("\n  Build a fresh InvoiceWarden.exe?", default=True)
 
     if do_build and not build():
         return 1
@@ -154,7 +157,7 @@ def main() -> int:
     # --- question 2: publish it as a GitHub release? ---------------
     if build_only:
         print(f"\n  Done. {EXE} is ready to run.\n"
-              f"  (settings + database live in %LOCALAPPDATA%\\InvoiceM8)\n")
+              f"  (settings + database live in %LOCALAPPDATA%\\InvoiceWarden)\n")
         return 0
 
     if gh("--version").returncode != 0:
@@ -187,28 +190,29 @@ def main() -> int:
     notes = (
         f"## What's new\n\n{changelog(APP_VERSION)}\n\n"
         "---\n\n"
-        "Download `InvoiceM8.exe` and run it - no install, no admin. It is "
+        "Download `InvoiceWarden.exe` and run it - no install, no admin. It is "
         "unsigned, so Windows SmartScreen shows \"Windows protected your PC\": "
         "click **More info** then **Run anyway**. Existing installs update "
         "themselves from this release."
     )
 
+    shutil.copyfile(EXE, LEGACY_EXE)
     if exists:
-        print(f"  Release {tag} exists - updating asset + notes")
-        r1 = gh("release", "upload", tag, str(EXE), "--clobber")
+        print(f"  Release {tag} exists - updating assets + notes")
+        r1 = gh("release", "upload", tag, str(EXE), str(LEGACY_EXE), "--clobber")
         r2 = gh("release", "edit", tag, "--notes", notes)
         ok = r1.returncode == 0 and r2.returncode == 0
         if not ok:
             print("  " + (r1.stderr.strip() or r2.stderr.strip()))
     else:
-        r = gh("release", "create", tag, str(EXE),
-               "--title", f"InvoiceM8 {tag}", "--notes", notes)
+        r = gh("release", "create", tag, str(EXE), str(LEGACY_EXE),
+               "--title", f"InvoiceWarden {tag}", "--notes", notes)
         ok = r.returncode == 0
         print("  " + (f"Created release {tag}" if ok else r.stderr.strip()))
 
     if ok:
         print(f"\n  Permanent link:\n"
-              f"  https://github.com/{slug}/releases/latest/download/InvoiceM8.exe\n")
+              f"  https://github.com/{slug}/releases/latest/download/InvoiceWarden.exe\n")
     return 0 if ok else 1
 
 
