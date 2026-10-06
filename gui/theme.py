@@ -101,8 +101,8 @@ def apply(ctk) -> None:
             corner_radius=3,
         )
     ctk.ThemeManager.theme["CTkCheckBox"].update(
-        fg_color=[C["green"], C["green"]],
-        hover_color=[shade(C["green"], 1.15)] * 2,
+        fg_color=[C["teal_btn"], C["teal_btn"]],
+        hover_color=[shade(C["teal_btn"], 1.15)] * 2,
         text_color=[C["text"], C["text"]],
         border_color=[C["border"], C["border"]],
     )

@@ -1,10 +1,12 @@
-"""Customer Management tab - the single local customer database.
+"""Suppliers page - the local list of suppliers and where each one's invoices go.
 
-Left: scrollable list. Right: edit form with the per-customer routing
-toggles (ServiceM8, MYOB, generic accounting), file-type filter, alias list
-and external-id mappings.
+Left: the list (new, unreviewed suppliers first). Right: the supplier's details. Up front
+are only the name, the other names it goes by, and a switch for each system that's
+actually set up. The IDs, file types and notes sit under "More options".
 """
 from __future__ import annotations
+
+from tkinter import messagebox
 
 import customtkinter as ctk
 
@@ -35,11 +37,11 @@ class CustomersTab:
         head = ctk.CTkFrame(left, fg_color=C["panel"])
         head.pack(fill="x", padx=10, pady=8)
         ctk.CTkLabel(head, text="Suppliers", font=FONT_HEAD,
-                     text_color=C["blue"]).pack(side="left")
+                     text_color=C["text"]).pack(side="left")
         accent_button(ctk, head, "?", self._guide, colour=C["btn_off"],
                       width=28, height=24).pack(side="right")
         accent_button(ctk, left, "+ New supplier", self._new,
-                      colour=C["green"]).pack(fill="x", padx=10, pady=(0, 6))
+                      colour=C["teal_btn"]).pack(fill="x", padx=10, pady=(0, 6))
         # Suppliers are added automatically, so the list needs ordering and a
         # way to see just the ones nobody has looked at yet.
         from core.database import Database as _Db
@@ -84,11 +86,8 @@ class CustomersTab:
         """Reload the customer list from the DB."""
         for w in self._list.winfo_children():
             w.destroy()
-        # Keep the toggle labels in sync with the currently-selected providers.
-        svc_label = label_for(self._app.settings.get("service.provider", "servicem8"))
-        acct_label = label_for(self._app.settings.get("accounting.provider", "none"))
-        self._sm8.configure(text=f"Enable {svc_label} upload (Service system)")
-        self._acct.configure(text=f"Enable {acct_label} upload (Accounting system)")
+        # Keep the "send to" switches in sync with the systems set up in Settings.
+        svc_label, acct_label = self._show_targets()
 
         rows = self._db.list_customers_sorted(self._sort.get(),
                                               new_only=bool(self._new_only.get()))
@@ -96,7 +95,7 @@ class CustomersTab:
         self._count.configure(
             text=(f"{len(rows)} shown  ·  {unreviewed} new" if unreviewed
                   else f"{len(rows)} shown"),
-            text_color=C["yellow"] if unreviewed else C["dim"])
+            text_color=C["amber"] if unreviewed else C["dim"])
 
         for row in rows:
             self._add_row(row, svc_label, acct_label)
@@ -121,11 +120,11 @@ class CustomersTab:
         card.pack(fill="x", pady=2)
         name = ctk.CTkLabel(card, text=row["name"], anchor="w", justify="left",
                             wraplength=250, font=FONT_UI,
-                            text_color=C["yellow"] if is_new else C["text"])
+                            text_color=C["amber"] if is_new else C["text"])
         name.pack(fill="x", padx=8, pady=(5, 0))
         sub = ctk.CTkLabel(card, text=sub_text, anchor="w", justify="left",
                            font=("Segoe UI", 11),
-                           text_color=C["yellow"] if is_new else C["dim"])
+                           text_color=C["amber"] if is_new else C["dim"])
         sub.pack(fill="x", padx=8, pady=(0, 5))
 
         # The frame and both labels behave as one button (click + hover).
@@ -136,30 +135,48 @@ class CustomersTab:
 
     # -- form ---------------------------------------------------
     def _build_form(self) -> None:
-        """Lay out the customer profile fields, toggles and buttons."""
+        """Lay out the supplier's details: the essentials, then More options."""
         f = self._form
-        ctk.CTkLabel(f, text="Supplier profile", font=FONT_HEAD,
-                     text_color=C["blue"]).pack(anchor="w", padx=6, pady=(8, 6))
+        ctk.CTkLabel(f, text="Supplier details", font=FONT_HEAD,
+                     text_color=C["text"]).pack(anchor="w", padx=6, pady=(8, 0))
+        self._hint = ctk.CTkLabel(f, text="", font=FONT_UI, text_color=C["dim"], anchor="w",
+                                  justify="left", wraplength=560)
+        self._hint.pack(fill="x", padx=6, pady=(0, 8))
 
-        self._name = self._entry(f, "Supplier name")
-        self._aliases = self._entry(f, "Aliases (comma separated)")
-        self._sm8_uuid = self._entry(f, "ServiceM8 client UUID (optional)")
-        self._acct_id = self._entry(f, "Accounting contact / supplier ID (optional)")
-        self._notes = self._entry(f, "Notes")
+        self._name = self._entry(f, "Name", "As it appears on their invoices")
+        self._aliases = self._entry(f, "Also known as",
+                                    "Other names on their invoices, separated by commas")
 
-        toggles = ctk.CTkFrame(f, fg_color=C["panel"])
-        toggles.pack(fill="x", padx=6, pady=10)
-        svc_label = label_for(self._app.settings.get("service.provider", "servicem8"))
-        acct_label = label_for(self._app.settings.get("accounting.provider", "none"))
-        self._sm8 = ctk.CTkSwitch(toggles, text=f"Enable {svc_label} upload (Service system)")
-        self._sm8.pack(anchor="w", padx=12, pady=6)
-        self._acct = ctk.CTkSwitch(toggles, text=f"Enable {acct_label} upload (Accounting system)")
-        self._acct.pack(anchor="w", padx=12, pady=6)
-
-        types = ctk.CTkFrame(f, fg_color=C["panel"])
-        types.pack(fill="x", padx=6, pady=6)
-        ctk.CTkLabel(types, text="File types to process", font=FONT_UI,
+        targets = ctk.CTkFrame(f, fg_color=C["panel"])
+        targets.pack(fill="x", padx=6, pady=10)
+        ctk.CTkLabel(targets, text="Send their invoices to", font=FONT_UI,
                      text_color=C["text"]).pack(anchor="w", padx=12, pady=(8, 2))
+        self._sm8 = ctk.CTkSwitch(targets, text="")
+        self._acct = ctk.CTkSwitch(targets, text="")
+        self._no_targets = ctk.CTkLabel(
+            targets, text="Nothing is set up yet. Connect ServiceM8 or your accounting "
+                          "system in Settings first.",
+            font=FONT_UI, text_color=C["amber"], anchor="w")
+        self._targets_box = targets
+        self._show_targets()
+
+        # Everything below is optional, so it starts folded away.
+        self._more_btn = ctk.CTkButton(f, text="More options  ▸", width=10, height=26,
+                                       fg_color="transparent", hover_color=C["row"],
+                                       text_color=C["teal"], font=FONT_UI, anchor="w",
+                                       command=self._toggle_more)
+        self._more_btn.pack(anchor="w", padx=2, pady=(2, 2))
+        more = ctk.CTkFrame(f, fg_color=C["bg"])
+        self._more = more
+        self._sm8_uuid = self._entry(more, "ServiceM8 client ID",
+                                     "Only needed if the name doesn't match in ServiceM8")
+        self._acct_id = self._entry(more, "Accounting contact ID",
+                                    "Only needed if the name doesn't match")
+        self._notes = self._entry(more, "Notes", "Anything worth remembering")
+        types = ctk.CTkFrame(more, fg_color=C["panel"])
+        types.pack(fill="x", padx=6, pady=6)
+        ctk.CTkLabel(types, text="File types to file (most suppliers send PDF only)",
+                     font=FONT_UI, text_color=C["text"]).pack(anchor="w", padx=12, pady=(8, 2))
         row = ctk.CTkFrame(types, fg_color=C["panel"])
         row.pack(anchor="w", padx=12, pady=(0, 8))
         for ext in SUPPORTED_FILE_TYPES:
@@ -169,18 +186,48 @@ class CustomersTab:
 
         bar = ctk.CTkFrame(f, fg_color=C["bg"])
         bar.pack(fill="x", padx=6, pady=14)
-        accent_button(ctk, bar, "Save", self._save, colour=C["green"]).pack(side="left")
-        accent_button(ctk, bar, "Delete", self._delete, colour=C["red"]).pack(side="left", padx=8)
+        self._bar = bar
+        accent_button(ctk, bar, "Save", self._save, colour=C["teal_btn"]).pack(side="left")
+        accent_button(ctk, bar, "Delete", self._delete, colour=C["btn_off"]).pack(side="left", padx=8)
         self._status = ctk.CTkLabel(f, text="", font=FONT_UI, text_color=C["dim"])
         self._status.pack(anchor="w", padx=6)
+        self._new()
 
-    def _entry(self, parent, label: str) -> ctk.CTkEntry:
-        """One labelled text field in the profile form."""
+    def _show_targets(self) -> tuple[str, str]:
+        """Show a switch only for each system that's set up; returns their labels."""
+        svc = self._app.settings.get("service.provider", "servicem8")
+        acct = self._app.settings.get("accounting.provider", "none")
+        svc_label, acct_label = label_for(svc), label_for(acct)
+        for w in (self._sm8, self._acct, self._no_targets):
+            w.pack_forget()
+        if svc and svc != "none":
+            self._sm8.configure(text=svc_label)
+            self._sm8.pack(anchor="w", padx=12, pady=4)
+        if acct and acct != "none":
+            self._acct.configure(text=acct_label)
+            self._acct.pack(anchor="w", padx=12, pady=4)
+        if (not svc or svc == "none") and (not acct or acct == "none"):
+            self._no_targets.pack(anchor="w", padx=12, pady=4)
+        self._targets_box.pack_configure(pady=(10, 10))
+        return svc_label, acct_label
+
+    def _toggle_more(self, show: bool | None = None) -> None:
+        """Fold or unfold More options."""
+        show = not self._more.winfo_ismapped() if show is None else show
+        if show:
+            self._more.pack(fill="x", before=self._bar)
+            self._more_btn.configure(text="More options  ▾")
+        else:
+            self._more.pack_forget()
+            self._more_btn.configure(text="More options  ▸")
+
+    def _entry(self, parent, label: str, placeholder: str = "") -> ctk.CTkEntry:
+        """One labelled text field in the details form."""
         wrap = ctk.CTkFrame(parent, fg_color=C["bg"])
         wrap.pack(fill="x", padx=6, pady=3)
         ctk.CTkLabel(wrap, text=label, font=FONT_UI, text_color=C["text"],
-                     width=250, anchor="w").pack(side="left")
-        e = ctk.CTkEntry(wrap, width=360)
+                     width=170, anchor="w").pack(side="left")
+        e = ctk.CTkEntry(wrap, width=360, placeholder_text=placeholder)
         e.pack(side="left", fill="x", expand=True)
         return e
 
@@ -193,7 +240,11 @@ class CustomersTab:
         self._sm8.deselect(); self._acct.deselect()
         for ext, cb in self._type_vars.items():
             cb.select() if ext == "pdf" else cb.deselect()
-        self._status.configure(text="New supplier - fill in and Save.", text_color=C["dim"])
+        self._toggle_more(False)
+        self._hint.configure(text="Pick a supplier on the left, or fill this in to add a new "
+                                  "one. Suppliers are also added for you when their first "
+                                  "invoice arrives.", text_color=C["dim"])
+        self._status.configure(text="")
 
     def _load(self, cid: int) -> None:
         """Populate the form from one stored customer profile."""
@@ -213,7 +264,16 @@ class CustomersTab:
         enabled = set(row["file_types"].split(","))
         for ext, cb in self._type_vars.items():
             cb.select() if ext in enabled else cb.deselect()
-        self._status.configure(text=f"Loaded '{row['name']}'.", text_color=C["dim"])
+        # Open More options when something in it is filled in, so nothing is hidden.
+        self._toggle_more(bool(row["servicem8_client_uuid"] or row["accounting_contact_id"]
+                               or row["notes"] or enabled != {"pdf"}))
+        if not row["reviewed"]:
+            self._hint.configure(text="Added automatically when their first invoice arrived. "
+                                      "Check the name and where their invoices go, then Save.",
+                                 text_color=C["amber"])
+        else:
+            self._hint.configure(text="", text_color=C["dim"])
+        self._status.configure(text="")
 
     def _collect(self) -> dict:
         """Read the form back into an upsert-ready dict."""
@@ -234,7 +294,7 @@ class CustomersTab:
         """Validate and persist the form, then refresh the list."""
         data = self._collect()
         if not data["name"]:
-            self._status.configure(text="Name is required.", text_color=C["red"])
+            self._status.configure(text="Enter the supplier's name.", text_color=C["red"])
             return
         try:
             # Saving IS the review: opening an auto-added supplier, checking
@@ -242,7 +302,8 @@ class CustomersTab:
             data["reviewed"] = True
             self._current_id = self._db.upsert_customer(data)
             self.refresh()
-            self._status.configure(text="Saved.", text_color=C["green"])
+            self._hint.configure(text="", text_color=C["dim"])
+            self._status.configure(text="Saved.", text_color=C["teal"])
         except Exception as exc:
             self._status.configure(text=f"Save failed: {exc}", text_color=C["red"])
 
@@ -250,10 +311,15 @@ class CustomersTab:
         """Remove the loaded customer and reset the form."""
         if self._current_id is None:
             return
+        name = self._name.get().strip() or "this supplier"
+        if not messagebox.askyesno("Delete supplier",
+                                   f"Delete {name}? Their past activity stays in the log.",
+                                   icon="warning", parent=self._form.winfo_toplevel()):
+            return
         self._db.delete_customer(self._current_id)
         self._new()
         self.refresh()
-        self._status.configure(text="Supplier deleted.", text_color=C["yellow"])
+        self._status.configure(text="Supplier deleted.", text_color=C["amber"])
 
     # -- used by the new-customer modal --------------------------
     def add_from_dialog(self, data: dict) -> int:
