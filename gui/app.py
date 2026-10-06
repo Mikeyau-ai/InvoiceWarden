@@ -30,6 +30,11 @@ from version import APP_VERSION
 _GLOW_STEPS = 20
 _GLOW_INTERVAL_MS = 200
 
+#: Cycling glyph shown on the Catch up button while a sweep is running, so
+#: there's something visibly moving instead of a frozen button.
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_SPINNER_INTERVAL_MS = 120
+
 
 class App(ctk.CTk):
     """Top-level window. Owns the DB, settings, watcher and all tabs."""
@@ -57,6 +62,8 @@ class App(ctk.CTk):
         self._glow_job: str | None = None
         self._pump_job: str | None = None
         self._glow_phase = 0
+        self._catchup_job: str | None = None
+        self._catchup_phase = 0
         self._settings_win: ctk.CTkToplevel | None = None
         self._about_win: ctk.CTkToplevel | None = None
 
@@ -108,8 +115,9 @@ class App(ctk.CTk):
         self._start_btn.pack(side="right", padx=4)
         accent_button(ctk, bar, "Scan now", self._scan_now,
                       colour=C["blue"]).pack(side="right", padx=4)
-        accent_button(ctk, bar, "Catch up…", self._catch_up,
-                      colour=C["btn_off"]).pack(side="right", padx=4)
+        self._catchup_btn = accent_button(ctk, bar, "Catch up…", self._catch_up,
+                                          colour=C["btn_off"])
+        self._catchup_btn.pack(side="right", padx=4)
 
     # -- tabs ---------------------------------------------------
     def _build_tabs(self) -> None:
@@ -297,9 +305,39 @@ class App(ctk.CTk):
         self.wait_window(dlg)
         if not dlg.result:
             return
+
+        def done() -> None:
+            self._catchup_spin_stop()
+            self.refresh_logs()
+
+        self._catchup_spin_start()
         self.watcher.catch_up(dlg.result["days_back"], dlg.result["job_floor"],
                               dlg.result["job_ceiling"],
-                              on_done=lambda: self.after(0, self.refresh_logs))
+                              on_done=lambda: self.after(0, done))
+
+    def _catchup_spin_start(self) -> None:
+        """Disable the Catch up button and start its cycling-glyph spinner."""
+        self._catchup_btn.configure(state="disabled")
+        self._catchup_phase = 0
+        self._catchup_spin_tick()
+
+    def _catchup_spin_tick(self) -> None:
+        """Advance the Catch up button's spinner glyph while a sweep runs."""
+        if self._closing:
+            return
+        glyph = _SPINNER_FRAMES[self._catchup_phase % len(_SPINNER_FRAMES)]
+        self._catchup_phase += 1
+        self._catchup_btn.configure(text=f"Catching up {glyph}")
+        self._catchup_job = self.after(_SPINNER_INTERVAL_MS, self._catchup_spin_tick)
+
+    def _catchup_spin_stop(self) -> None:
+        """Stop the spinner and restore the Catch up button to normal."""
+        if self._catchup_job is not None:
+            self.after_cancel(self._catchup_job)
+            self._catchup_job = None
+        if self._closing:
+            return
+        self._catchup_btn.configure(text="Catch up…", state="normal")
 
     def _set_status(self, running: bool) -> None:
         """Reflect watcher state in the toggle button and the glow border."""
@@ -361,13 +399,13 @@ class App(ctk.CTk):
             return
         self._closing = True
 
-        for job in (self._pump_job, self._glow_job):
+        for job in (self._pump_job, self._glow_job, self._catchup_job):
             if job is not None:
                 try:
                     self.after_cancel(job)
                 except Exception:
                     pass
-        self._pump_job = self._glow_job = None
+        self._pump_job = self._glow_job = self._catchup_job = None
 
         try:
             self.watcher.stop()          # signals + joins the daemon thread

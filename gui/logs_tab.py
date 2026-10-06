@@ -5,12 +5,14 @@ lines here through the app's event queue.
 
 Two view levels:
   * the default *simple* view shows only outcomes - uploads, skips, errors and
-    supplier changes;
+    supplier changes - with a plain local date/time;
   * ticking **Advanced** also shows the routine step-by-step chatter (email
-    seen, parsed, polled, non-invoice attachments).
+    seen, parsed, polled, non-invoice attachments) and the raw UTC timestamp
+    each row was stored with.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from tkinter import messagebox
 
 import customtkinter as ctk
@@ -41,6 +43,25 @@ def line_tag(level: str, action: str) -> str:
     if level == "INFO" and action in _SUCCESS_ACTIONS:
         return "SUCCESS"
     return level
+
+
+def format_ts(ts: str, advanced: bool) -> str:
+    """Render a stored UTC timestamp for the log column.
+
+    Advanced view keeps the raw ISO-8601 UTC string, useful for cross
+    referencing against other logs. The simple view converts it to local
+    time and drops the seconds/timezone detail non-technical readers don't
+    need.
+    """
+    if not ts:
+        return ts
+    if advanced:
+        return f"{ts:25}"
+    try:
+        local = datetime.fromisoformat(ts).astimezone()
+    except ValueError:
+        return ts
+    return f"{local.strftime('%b %d  %I:%M %p'):17}"
 
 
 def format_line(ts, level, platform, customer, ref, action, filename, message) -> str:
@@ -143,7 +164,7 @@ class LogsTab:
         for r in reversed(rows):  # oldest first
             if not advanced and is_noise_line(r["level"], r["action"]):
                 continue
-            line = format_line(r["ts"], r["level"], r["platform"],
+            line = format_line(format_ts(r["ts"], advanced), r["level"], r["platform"],
                                r["customer_name"], r["invoice_ref"],
                                r["action"], r["filename"], r["message"])
             self._box.insert("end", line, line_tag(r["level"], r["action"]))
@@ -158,11 +179,13 @@ class LogsTab:
             return
         level = event.get("level", "INFO")
         action = event.get("action", "")
-        if not self._advanced_on() and is_noise_line(level, action):
+        advanced = self._advanced_on()
+        if not advanced and is_noise_line(level, action):
             return
-        line = format_line(event.get("ts", ""), level, event.get("platform", "-"),
-                           event.get("customer_name"), event.get("invoice_ref"),
-                           action, event.get("filename", ""), event.get("message", ""))
+        line = format_line(format_ts(event.get("ts", ""), advanced), level,
+                           event.get("platform", "-"), event.get("customer_name"),
+                           event.get("invoice_ref"), action,
+                           event.get("filename", ""), event.get("message", ""))
         self._box.configure(state="normal")
         self._box.insert("end", line, line_tag(level, action))
         self._box.see("end")
