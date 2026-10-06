@@ -517,6 +517,15 @@ class SettingsTab:
             self._row(self._ai_box, "ai.compat_base_url", "API base URL (ends in /v1)", False)
         klabel = "API Key" if meta["needs_key"] else "API Key (optional for local servers)"
         self._row(self._ai_box, meta["key_setting"], klabel, True)
+        self._gemini_plan = None
+        if akey == "gemini":
+            # Free keys use a model with a bigger free allowance; the note says what free costs.
+            plans = {"Free key (Google may use invoice data)": "free",
+                     "Paid key (Google doesn't use your data)": "paid"}
+            self._gemini_plan = self._dropdown(self._ai_box, "Key type", list(plans), lambda: None)
+            self._gemini_plan_values = plans
+            current = self._settings.get("ai.gemini_plan", "") or "paid"
+            self._gemini_plan.set(next(k for k, v in plans.items() if v == current))
 
     # -- load / save ----------------------------------------
     def load(self) -> None:
@@ -573,6 +582,9 @@ class SettingsTab:
             self._settings.set("accounting.provider",
                                self._provider_key(self._accounting, ACCOUNTING_PROVIDERS))
         self._settings.set("ai.provider", self._ai_key())
+        if getattr(self, "_gemini_plan", None) is not None:
+            self._settings.set("ai.gemini_plan",
+                               self._gemini_plan_values.get(self._gemini_plan.get(), "paid"))
         self._settings.set("outlook.backend", self._backend_key())
         self._settings.set("watcher.poll_minutes", self._poll.get() or "5")
         self._settings.set("customers.min_confidence", self._min_conf.get() or "0.4")

@@ -224,8 +224,22 @@ _GEMINI_CANDIDATES = (
     "gemini-flash-latest",
 )
 
-#: Cache of the model id discovered from the API, so we ask at most once.
-_gemini_resolved: str = ""
+#: For a FREE Gemini key ("ai.gemini_plan" = "free"): the Flash-Lite models have a far bigger
+#: free daily allowance (hundreds of requests, against ~20 for the newest Flash models, as of
+#: 2026-10) and read invoices well. Google changes these limits without notice.
+_GEMINI_FREE_CANDIDATES = (
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash-lite",
+)
+
+#: Cache of the model id discovered from the API (per plan), so we ask at most once.
+_gemini_resolved: dict[bool, str] = {}
+
+
+def gemini_free(settings) -> bool:
+    """True when the user said their Gemini key is on Google's free tier."""
+    return (settings.get("ai.gemini_plan", "") or "").strip() == "free"
 
 
 def gemini_available_models(api_key: str) -> list[str]:
@@ -244,22 +258,27 @@ def gemini_available_models(api_key: str) -> list[str]:
     return [m for m in out if m]
 
 
-def _pick_gemini_model(api_key: str) -> str:
-    """Best available model: a preferred candidate, else any flash, else any."""
-    global _gemini_resolved
-    if _gemini_resolved:
-        return _gemini_resolved
+def _pick_gemini_model(api_key: str, free: bool = False) -> str:
+    """Best available model: a preferred candidate, else any flash, else any.
+
+    A free key prefers Flash-Lite (see _GEMINI_FREE_CANDIDATES); otherwise the full Flash.
+    """
+    if _gemini_resolved.get(free):
+        return _gemini_resolved[free]
     models = gemini_available_models(api_key)
-    for want in _GEMINI_CANDIDATES:
+    chosen = ""
+    for want in (_GEMINI_FREE_CANDIDATES if free else ()) + _GEMINI_CANDIDATES:
         if want in models:
-            _gemini_resolved = want
+            chosen = want
             break
     else:
+        lite = [m for m in models if "flash-lite" in m] if free else []
         flash = [m for m in models if "flash" in m and "thinking" not in m]
-        _gemini_resolved = (flash or models or [""])[0]
-    if _gemini_resolved:
-        log.info("Gemini model resolved to %s", _gemini_resolved)
-    return _gemini_resolved
+        chosen = (lite or flash or models or [""])[0]
+    if chosen:
+        _gemini_resolved[free] = chosen
+        log.info("Gemini model resolved to %s%s", chosen, " (free key)" if free else "")
+    return chosen
 
 
 def _gemini_generate(api_key: str, model: str, prompt: str) -> str:
@@ -274,7 +293,7 @@ def _gemini_generate(api_key: str, model: str, prompt: str) -> str:
     return "".join(p.get("text", "") for p in parts)
 
 
-def _call_gemini(api_key: str, model: str, prompt: str) -> str:
+def _call_gemini(api_key: str, model: str, prompt: str, free: bool = False) -> str:
     """Google Generative Language API, resilient to retired model ids.
 
     A configured model is tried first; on 404 (retired/renamed/not available to
@@ -290,7 +309,7 @@ def _call_gemini(api_key: str, model: str, prompt: str) -> str:
             log.warning("Gemini model %s returned 404; discovering a current one.",
                         chosen)
 
-    fallback = _pick_gemini_model(api_key)
+    fallback = _pick_gemini_model(api_key, free)
     if not fallback:
         raise RuntimeError(
             "This Gemini API key has no models that support generateContent. "
@@ -576,7 +595,7 @@ def _ai_config(settings) -> tuple[str, dict, str, str, str]:
 
 
 def _call_provider(provider: str, api_key: str, model: str, prompt: str,
-                   base_url: str = "") -> str:
+                   base_url: str = "", free: bool = False) -> str:
     """Send one prompt to whichever provider is configured; return raw text."""
     if provider == "openai":
         return _call_openai_chat(api_key, model, prompt)
@@ -584,7 +603,7 @@ def _call_provider(provider: str, api_key: str, model: str, prompt: str,
         return _call_openai_chat(api_key, model, prompt, base_url)
     if provider == "anthropic":
         return _call_anthropic(api_key, model, prompt)
-    return _call_gemini(api_key, model, prompt)
+    return _call_gemini(api_key, model, prompt, free)
 
 
 # A miniature invoice used by the Settings "Test AI" button. Exercising the
@@ -617,7 +636,8 @@ def test_ai_provider(settings) -> tuple[bool, str]:
                             body=_TEST_BODY, attachment="",
                             filenames="INV-1042_Acme.pdf")
     try:
-        raw = _call_provider(provider, api_key, model, prompt, base_url)
+        raw = _call_provider(provider, api_key, model, prompt, base_url,
+                             free=gemini_free(settings))
     except Exception as exc:
         return False, f"{label} ({shown_model}) failed: {exc}"
 
@@ -660,7 +680,8 @@ class InvoiceParser:
                                     attachment=attachment_text,
                                     filenames=filenames, sender=sender)
             try:
-                raw = _call_provider(provider, key, model, prompt, base_url)
+                raw = _call_provider(provider, key, model, prompt, base_url,
+                                     free=gemini_free(self._settings))
                 data = _coerce_json(raw)
                 if data:
                     return ParseResult(

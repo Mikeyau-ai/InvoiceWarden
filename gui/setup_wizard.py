@@ -8,6 +8,7 @@ and finished later in Settings.
 from __future__ import annotations
 
 import threading
+import webbrowser
 
 import customtkinter as ctk
 
@@ -22,6 +23,26 @@ from integrations.registry import build_provider
 
 _FONT_TITLE = ("Segoe UI Semibold", 18)
 _FONT_SMALL = ("Segoe UI", 12)
+
+#: Where "Request access" sends people (the support form, pre-filled for this request).
+STUDIO_AI_REQUEST_URL = ("https://sixthdaystudios.com/support?app=invoicewarden&topic=help"
+                         "&subject=ai-access")
+
+#: How the AI is provided: (choice, title, explanation). See _page_ai.
+_AI_CHOICES = [
+    ("free", "Free Google Gemini key (good to start)",
+     "Free for normal use and takes about 5 minutes. On Google's free tier, Google may use "
+     "what's sent (your invoices) to improve its products, and people at Google may read it."),
+    ("paid", "Paid Google Gemini key",
+     "The same key with billing switched on in Google: usually well under A$1 a month. "
+     "Google doesn't use your data."),
+    ("other", "Another AI service",
+     "OpenAI (ChatGPT), Anthropic (Claude), or your own AI server."),
+    ("studio", "Sixth Day Studios AI (request access)",
+     "We provide the AI, so you don't need a key. Your invoices pass through our server on "
+     "their way to the AI (we don't keep them). Not open yet: request access and we'll be "
+     "in touch."),
+]
 
 #: How to read mail: (stored key, title, one-line explanation).
 _MAIL_CHOICES = [
@@ -51,8 +72,8 @@ class SetupWizard(ctk.CTkToplevel):
         self._s = app.settings
         self._step = 0
         self.title(f"Set up {APP_NAME}")
-        self.geometry("640x560")
-        self.minsize(600, 520)
+        self.geometry("660x700")
+        self.minsize(600, 600)
         self.configure(fg_color=C["bg"])
         self.transient(app)
         dark_titlebar(self)
@@ -303,34 +324,81 @@ class SetupWizard(ctk.CTkToplevel):
         self._run_test("Checking with ServiceM8...", work)
 
     def _page_ai(self) -> None:
-        """Which AI, its key, the guide and a Test."""
+        """How the AI is provided (free key, paid key, another AI, or ours), then its details."""
         self._title("The AI that reads invoices",
                     "It finds the supplier, invoice number and job number on each invoice. "
-                    "Google Gemini is the cheapest and works well; a key takes a few minutes.")
-        current = self._s.get("ai.provider", "gemini") or "gemini"
-        labels = {m["label"]: k for k, m in AI_PROVIDERS.items()}
-        row = ctk.CTkFrame(self._page, fg_color=C["bg"])
-        row.pack(fill="x", pady=(4, 0))
-        ctk.CTkLabel(row, text="AI provider", font=FONT_UI, text_color=C["text"]).pack(side="left")
-        menu = ctk.CTkOptionMenu(row, values=list(labels),
-                                 command=lambda label: (self._save_fields(),
-                                                        self._s.set("ai.provider", labels[label]),
-                                                        self._show()))
-        menu.set(AI_PROVIDERS.get(current, AI_PROVIDERS["gemini"])["label"])
-        menu.pack(side="left", padx=10)
-        self._s.set("ai.provider", current)
-        meta = AI_PROVIDERS.get(current, AI_PROVIDERS["gemini"])
+                    "Choose how it's provided:")
+        provider = self._s.get("ai.provider", "gemini") or "gemini"
+        plan = self._s.get("ai.gemini_plan", "")
+        start = "other" if provider != "gemini" else ("paid" if plan == "paid" else "free")
+        self._ai_choice = ctk.StringVar(value=getattr(self, "_ai_last", start))
+        for key, title, blurb in _AI_CHOICES:
+            box = ctk.CTkFrame(self._page, fg_color=C["panel"], corner_radius=6)
+            box.pack(fill="x", pady=2)
+            ctk.CTkRadioButton(box, text=title, value=key, variable=self._ai_choice, font=FONT_UI,
+                               fg_color=C["teal_btn"], command=self._ai_details
+                               ).pack(anchor="w", padx=12, pady=(6, 0))
+            ctk.CTkLabel(box, text=blurb, font=_FONT_SMALL, text_color=C["dim"], anchor="w",
+                         justify="left", wraplength=510).pack(fill="x", padx=40, pady=(0, 6))
+        self._details = ctk.CTkFrame(self._page, fg_color=C["bg"])
+        self._details.pack(fill="x", pady=(4, 0))
+        ctk.CTkLabel(self._page, text="No AI at all? It still works by looking for labels like "
+                                      "\"Job No\", but misses job numbers that aren't clearly marked.",
+                     font=_FONT_SMALL, text_color=C["dim"], anchor="w", justify="left",
+                     wraplength=580).pack(fill="x", side="bottom", pady=(6, 0))
+        self._ai_details()
+
+    def _ai_details(self) -> None:
+        """The fields for the chosen way of providing the AI."""
+        self._save_fields()
+        for w in self._details.winfo_children():
+            w.destroy()
+        self._fields = {}
+        choice = self._ai_last = self._ai_choice.get()
+        d = self._details
+        if choice == "studio":
+            ctk.CTkLabel(d, text="Request access and we'll email you when it's ready. Until "
+                                 "then you can start with a free Gemini key and switch later.",
+                         font=FONT_UI, text_color=C["text"], anchor="w", justify="left",
+                         wraplength=580).pack(fill="x", pady=(4, 6))
+            accent_button(ctk, d, "Request access", lambda: webbrowser.open(STUDIO_AI_REQUEST_URL),
+                          colour=C["teal_btn"]).pack(anchor="w")
+            self._result = ctk.CTkLabel(d, text="")
+            return
+        if choice in ("free", "paid"):
+            self._s.set("ai.provider", "gemini")
+            self._s.set("ai.gemini_plan", choice)
+            provider = "gemini"
+        else:
+            provider = self._s.get("ai.provider", "openai")
+            if provider == "gemini":
+                provider = "openai"
+            others = {m["label"]: k for k, m in AI_PROVIDERS.items() if k != "gemini"}
+            row = ctk.CTkFrame(d, fg_color=C["bg"])
+            row.pack(fill="x", pady=(4, 0))
+            ctk.CTkLabel(row, text="AI service", font=FONT_UI, text_color=C["text"]).pack(side="left")
+            menu = ctk.CTkOptionMenu(row, values=list(others),
+                                     command=lambda label: (self._save_fields(),
+                                                            self._s.set("ai.provider", others[label]),
+                                                            self._ai_details()))
+            menu.set(AI_PROVIDERS[provider]["label"])
+            menu.pack(side="left", padx=10)
+            self._s.set("ai.provider", provider)
+        meta = AI_PROVIDERS[provider]
         if meta.get("needs_base_url"):
-            self._field(self._page, "Server address (ends in /v1)", "ai.compat_base_url")
-        self._field(self._page, "API key" if meta.get("needs_key", True) else
+            self._field(d, "Server address (ends in /v1)", "ai.compat_base_url")
+        self._field(d, "API key" if meta.get("needs_key", True) else
                     "API key (optional for a local server)", meta["key_setting"], secret=True)
-        buttons = ctk.CTkFrame(self._page, fg_color=C["bg"])
-        buttons.pack(fill="x", pady=(10, 0))
+        buttons = ctk.CTkFrame(d, fg_color=C["bg"])
+        buttons.pack(fill="x", pady=(8, 0))
         accent_button(ctk, buttons, "Test", self._test_ai, colour=C["btn_off"],
                       width=90).pack(side="left")
-        accent_button(ctk, buttons, "How do I get a key?", lambda: self._guide(current),
-                      colour=C["btn_off"]).pack(side="left", padx=8)
-        self._status_line()
+        guide = {"free": "How do I get a free key?", "paid": "How do I set up a paid key?"}
+        accent_button(ctk, buttons, guide.get(choice, "How do I get a key?"),
+                      lambda: self._guide(provider), colour=C["btn_off"]).pack(side="left", padx=8)
+        self._result = ctk.CTkLabel(d, text="", font=FONT_UI, text_color=C["dim"], anchor="w",
+                                    justify="left", wraplength=570)
+        self._result.pack(fill="x", pady=(4, 0))
 
     def _test_ai(self) -> None:
         """Send a made-up invoice to the AI and check it reads it back."""

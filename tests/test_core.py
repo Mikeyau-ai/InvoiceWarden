@@ -494,7 +494,7 @@ class TestAiSelfTest(TempDbCase):
         self.settings.set("ai.gemini_api_key", "test-key")
         seen = {}
 
-        def fake_call(provider, api_key, model, prompt, base_url=""):
+        def fake_call(provider, api_key, model, prompt, base_url="", free=False):
             """Stand in for the provider HTTP call; capture the built prompt."""
             seen["prompt"] = prompt
             return ('{"customer_name": "Acme Pty Ltd", "job_number": "10160", '
