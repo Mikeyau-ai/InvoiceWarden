@@ -18,6 +18,7 @@ from gui.activity_page import ActivityPage
 from gui.customers_tab import CustomersTab
 from gui.dialogs import CatchUpDialog, NewCustomerDialog
 from gui.settings_tab import SettingsTab
+from gui.setup_wizard import SetupWizard, needs_setup
 from gui.about_dialog import AboutWindow
 from gui.theme import C, FONT_WORDMARK, accent_button
 from gui.update_dialog import UpdateDialog
@@ -79,7 +80,11 @@ class App(ctk.CTk):
         self._update_shown = False
         updater.start_check()
 
-        if autostart or settings.get_bool("watcher.autostart"):
+        self._setup_win: SetupWizard | None = None
+        if needs_setup(settings):
+            # Fresh install: walk through email, ServiceM8 and AI first.
+            self.after(700, self.open_setup)
+        elif autostart or settings.get_bool("watcher.autostart"):
             self.after(800, self.watcher.start)
 
     # -- header --------------------------------------------------
@@ -148,6 +153,13 @@ class App(ctk.CTk):
         self._settings_win = win
         self.settings_tab = SettingsTab(win, self)
         win.after(200, win.lift)
+
+    def open_setup(self) -> None:
+        """The setup wizard (single instance): first run, or Settings > Run setup again."""
+        if self._setup_win is not None and self._setup_win.winfo_exists():
+            self._setup_win.lift()
+            return
+        self._setup_win = SetupWizard(self)
 
     def open_about(self) -> None:
         """About / changelog window (single instance)."""

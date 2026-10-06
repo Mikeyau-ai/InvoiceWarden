@@ -110,5 +110,34 @@ class CountActivityTests(unittest.TestCase):
             db.close()
 
 
+class NeedsSetupTests(unittest.TestCase):
+    """When the setup wizard opens by itself."""
+
+    def _settings(self, values):
+        """A stand-in settings object backed by a dict."""
+        class S:
+            def get(self, key, default=""):
+                return values.get(key, default)
+
+            def get_bool(self, key):
+                return values.get(key, "0") == "1"
+        return S()
+
+    def test_fresh_install_needs_setup(self):
+        """Nothing saved yet: the wizard opens."""
+        from gui.setup_wizard import needs_setup
+        self.assertTrue(needs_setup(self._settings({})))
+
+    def test_existing_install_is_left_alone(self):
+        """A copy that already has a ServiceM8 key (like the one at work) never sees it."""
+        from gui.setup_wizard import needs_setup
+        self.assertFalse(needs_setup(self._settings({"servicem8.api_key": "abc"})))
+
+    def test_finished_setup_is_not_repeated(self):
+        """Once finished (even with steps skipped) it doesn't come back by itself."""
+        from gui.setup_wizard import needs_setup
+        self.assertFalse(needs_setup(self._settings({"setup.done": "1"})))
+
+
 if __name__ == "__main__":
     unittest.main()

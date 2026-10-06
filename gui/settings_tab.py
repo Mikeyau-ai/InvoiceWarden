@@ -282,6 +282,8 @@ class SettingsTab:
                       width=120).pack(side="left")
         accent_button(ctk, bar, "Setup guide", self._open_full_guide,
                       colour=C["btn_off"]).pack(side="left", padx=8)
+        accent_button(ctk, bar, "Run setup again", self._app.open_setup,
+                      colour=C["btn_off"]).pack(side="left")
 
         # A textbox rather than a label: diagnostics can be several lines, and
         # this wraps, scrolls and can be selected/copied.
