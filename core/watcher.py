@@ -50,6 +50,8 @@ class Watcher:
         # which also means "the watcher is not running".
         self._scan_lock = threading.Lock()
         self._catch_up_stop = threading.Event()
+        #: When the last mailbox scan started (UTC), for the "checked 2 min ago" status.
+        self.last_poll: datetime | None = None
 
     # -- lifecycle ---------------------------------------------------
     @property
@@ -203,6 +205,7 @@ class Watcher:
         catch-up.
         """
         cancel = cancel or self._stop
+        self.last_poll = datetime.now(timezone.utc)
         # Prefilter on the mailbox side so attachments no customer wants are
         # never transferred; per-customer filtering still happens in the router.
         allowed_ext = self._db.all_file_types()

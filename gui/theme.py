@@ -30,6 +30,11 @@ C = {
     "chip_on":  "#2a2a2a",
     "chip_off": "#1a1a1a",
     "btn_off":  "#242424",
+    # Sixth Day Studios teal (shared with RamWarden) and the "needs attention" amber.
+    "teal":     "#2cc4a8",
+    "teal_btn": "#0f8f7a",
+    "amber":    "#e8b04a",
+    "amber_bg": "#2e2617",
 }
 
 # --- Fonts (RamBo spec) -------------------------------------------------
@@ -102,7 +107,7 @@ def apply(ctk) -> None:
         border_color=[C["border"], C["border"]],
     )
     ctk.ThemeManager.theme["CTkSwitch"].update(
-        progress_color=[C["green"], C["green"]],
+        progress_color=[C["teal"], C["teal"]],
         button_color=[C["text"], C["text"]],
         fg_color=[C["btn_off"], C["btn_off"]],
         text_color=[C["text"], C["text"]],

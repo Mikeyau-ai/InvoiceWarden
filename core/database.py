@@ -269,6 +269,15 @@ class Database:
         rows = self._query("SELECT COUNT(*) AS n FROM customers WHERE reviewed=0")
         return int(rows[0]["n"]) if rows else 0
 
+    def count_activity(self, actions: tuple[str, ...], since_iso: str) -> int:
+        """How many activity rows with one of ``actions`` were logged at or after
+        ``since_iso`` (a UTC ISO-8601 string, the same format ``ts`` is stored in)."""
+        marks = ",".join("?" for _ in actions)
+        rows = self._query(
+            f"SELECT COUNT(*) AS n FROM activity_log WHERE action IN ({marks}) AND ts >= ?",
+            (*actions, since_iso))
+        return int(rows[0]["n"]) if rows else 0
+
     def mark_customer_reviewed(self, customer_id: int, reviewed: bool = True) -> None:
         """Clear (or restore) the 'new' badge on one customer."""
         self._exec("UPDATE customers SET reviewed=? WHERE id=?",

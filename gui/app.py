@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import math
 import queue
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,23 +14,18 @@ from core.router import Router
 from core.settings_store import Settings
 from core.watcher import Watcher
 from gui import theme
+from gui.activity_page import ActivityPage
 from gui.customers_tab import CustomersTab
 from gui.dialogs import CatchUpDialog, NewCustomerDialog
-from gui.errors_tab import ErrorsTab
-from gui.logs_tab import LogsTab
 from gui.settings_tab import SettingsTab
 from gui.about_dialog import AboutWindow
-from gui.theme import C, FONT_TAGLINE, FONT_UI, FONT_WORDMARK, accent_button
+from gui.theme import C, FONT_WORDMARK, accent_button
 from gui.update_dialog import UpdateDialog
 from integrations.registry import label_for
 from version import APP_VERSION
 
-#: Watcher-running border pulse: steps per cycle and ms between them.
-_GLOW_STEPS = 20
-_GLOW_INTERVAL_MS = 200
-
-#: Cycling glyph shown on the Catch up button while a sweep is running, so
-#: there's something visibly moving instead of a frozen button.
+#: Cycling glyph shown on "Go back further…" while a catch-up sweep is running, so
+#: there's something visibly moving instead of a frozen link.
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _SPINNER_INTERVAL_MS = 120
 
@@ -59,16 +53,14 @@ class App(ctk.CTk):
 
         self._running = False
         self._closing = False
-        self._glow_job: str | None = None
         self._pump_job: str | None = None
-        self._glow_phase = 0
         self._catchup_job: str | None = None
         self._catchup_phase = 0
         self._settings_win: ctk.CTkToplevel | None = None
         self._about_win: ctk.CTkToplevel | None = None
 
         self._build_header()
-        self._build_tabs()
+        self._build_pages()
 
         # No on_new_customer callback: unknown suppliers are added
         # automatically by the router and flagged NEW in the Customers tab,
@@ -92,50 +84,50 @@ class App(ctk.CTk):
 
     # -- header --------------------------------------------------
     def _build_header(self) -> None:
-        """Top bar: wordmark, tagline and the Scan/Start/Settings buttons."""
+        """Top bar: wordmark on the left, the section buttons on the right."""
         bar = ctk.CTkFrame(self, fg_color=C["panel"], corner_radius=0, height=54)
         bar.pack(fill="x")
         bar.pack_propagate(False)
         wordmark = ctk.CTkLabel(bar, text="INVOICEM8", font=FONT_WORDMARK,
-                                text_color=C["text"], cursor="hand2")
+                                text_color=C["teal"], cursor="hand2")
         wordmark.pack(side="left", padx=(16, 4))
         wordmark.bind("<Button-1>", lambda _e: self.open_about())
-        self._tagline = ctk.CTkLabel(bar, text="", font=FONT_TAGLINE,
-                                     text_color=C["dim"], cursor="hand2")
-        self._tagline.pack(side="left", padx=4)
-        self._tagline.bind("<Button-1>", lambda _e: self.open_about())
-        self._refresh_tagline()
 
-        # Right-aligned controls (packed right-to-left):
-        #   Catch up | Scan now | Start/Stop | Settings
+        # Section buttons, packed right-to-left: Settings opens its own window for now.
         accent_button(ctk, bar, "Settings", self._open_settings,
-                      colour=C["btn_off"]).pack(side="right", padx=(4, 12))
-        self._start_btn = accent_button(ctk, bar, "Start Watcher", self._toggle_watcher,
-                                        colour=C["green"])
-        self._start_btn.pack(side="right", padx=4)
-        accent_button(ctk, bar, "Scan now", self._scan_now,
-                      colour=C["blue"]).pack(side="right", padx=4)
-        self._catchup_btn = accent_button(ctk, bar, "Catch up…", self._catch_up,
-                                          colour=C["btn_off"])
-        self._catchup_btn.pack(side="right", padx=4)
+                      colour=C["btn_off"], width=96).pack(side="right", padx=(4, 12))
+        self._nav: dict[str, ctk.CTkButton] = {}
+        for key, label in (("suppliers", "Suppliers"), ("activity", "Activity")):
+            btn = accent_button(ctk, bar, label, lambda k=key: self.show_page(k),
+                                colour=C["btn_off"], width=96)
+            btn.pack(side="right", padx=4)
+            self._nav[key] = btn
 
-    # -- tabs ---------------------------------------------------
-    def _build_tabs(self) -> None:
-        """Create the three main tabs inside the glow border frame."""
-        # Outer frame carries the "watcher running" glow border.
-        self._glow = ctk.CTkFrame(self, fg_color=C["bg"], corner_radius=8,
-                                  border_width=2, border_color=C["border"])
-        self._glow.pack(fill="both", expand=True, padx=10, pady=10)
-
-        self.tabs = ctk.CTkTabview(self._glow, fg_color=C["panel"])
-        self.tabs.pack(fill="both", expand=True, padx=3, pady=3)
-        for name in ("Suppliers", "Activity Log", "Error Log"):
-            self.tabs.add(name)
-        self.customers_tab = CustomersTab(self.tabs.tab("Suppliers"), self)
-        self.logs_tab = LogsTab(self.tabs.tab("Activity Log"), self)
-        self.errors_tab = ErrorsTab(self.tabs.tab("Error Log"), self)
+    # -- pages --------------------------------------------------
+    def _build_pages(self) -> None:
+        """Activity (the main screen) and Suppliers; one shown at a time."""
+        self._body = ctk.CTkFrame(self, fg_color=C["bg"])
+        self._body.pack(fill="both", expand=True)
+        self.activity = ActivityPage(self._body, self)
+        sup = ctk.CTkFrame(self._body, fg_color=C["bg"])
+        inner = ctk.CTkFrame(sup, fg_color=C["panel"])
+        inner.pack(fill="both", expand=True, padx=14, pady=14)
+        self.customers_tab = CustomersTab(inner, self)
+        self._pages = {"activity": self.activity.frame, "suppliers": sup}
         self.settings_tab: SettingsTab | None = None  # created on first open
-        self.tabs.set("Activity Log")
+        self.show_page("activity")
+
+    def show_page(self, key: str) -> None:
+        """Show one section and highlight its button."""
+        for name, frame in self._pages.items():
+            frame.pack_forget()
+        self._pages[key].pack(fill="both", expand=True)
+        for name, btn in self._nav.items():
+            on = name == key
+            btn.configure(fg_color=C["teal_btn"] if on else C["btn_off"],
+                          hover_color=theme.shade(C["teal_btn"] if on else C["btn_off"], 1.2))
+        if key == "suppliers":
+            self.customers_tab.refresh()
 
     # -- settings window --------------------------------------
     def _open_settings(self) -> None:
@@ -183,7 +175,7 @@ class App(ctk.CTk):
             return
         try:
             while True:
-                self.logs_tab.append_live(self._events.get_nowait())
+                self.activity.on_event(self._events.get_nowait())
         except queue.Empty:
             pass
         try:
@@ -281,22 +273,22 @@ class App(ctk.CTk):
             self.db.set_pending_status(row["id"], "resolved")
         self.refresh_logs()
 
-    # -- misc callbacks ---------------------------------------
-    def _toggle_watcher(self) -> None:
-        """Start/Stop button: flip the watcher state."""
-        if self.watcher.running:
-            self.watcher.stop()
-        else:
+    # -- watcher controls (called by the Activity page) ---------
+    def set_watching(self, on: bool) -> None:
+        """The On/Off switch: start or stop the watcher."""
+        if on and not self.watcher.running:
             self.watcher.start()
+        elif not on and self.watcher.running:
+            self.watcher.stop()
 
-    def _scan_now(self) -> None:
-        """Scan-now button: start the watcher if idle, then force a poll."""
+    def scan_now(self) -> None:
+        """Check now: turn on if off, then check the mailboxes straight away."""
         if not self.watcher.running:
             self.watcher.start()
         self.watcher.scan_now()
 
-    def _catch_up(self) -> None:
-        """Catch-up button: prompt for a lookback + job range, then sweep once.
+    def catch_up(self) -> None:
+        """Go back further: ask how far back (and which job numbers), then sweep once.
 
         Independent of the watcher's on/off state - the sweep runs on its own
         thread. The job range is not saved; it guards this one run.
@@ -310,86 +302,46 @@ class App(ctk.CTk):
             self._catchup_spin_stop()
             self.refresh_logs()
 
-        self._catchup_spin_start()
+        self._catchup_phase = 0
+        self._catchup_spin_tick()
         self.watcher.catch_up(dlg.result["days_back"], dlg.result["job_floor"],
                               dlg.result["job_ceiling"],
                               on_done=lambda: self.after(0, done))
 
-    def _catchup_spin_start(self) -> None:
-        """Disable the Catch up button and start its cycling-glyph spinner."""
-        self._catchup_btn.configure(state="disabled")
-        self._catchup_phase = 0
-        self._catchup_spin_tick()
-
     def _catchup_spin_tick(self) -> None:
-        """Advance the Catch up button's spinner glyph while a sweep runs."""
+        """Advance the "Going back…" spinner while a sweep runs."""
         if self._closing:
             return
         glyph = _SPINNER_FRAMES[self._catchup_phase % len(_SPINNER_FRAMES)]
         self._catchup_phase += 1
-        self._catchup_btn.configure(text=f"Catching up {glyph}")
+        self.activity.set_sweeping(True, glyph)
         self._catchup_job = self.after(_SPINNER_INTERVAL_MS, self._catchup_spin_tick)
 
     def _catchup_spin_stop(self) -> None:
-        """Stop the spinner and restore the Catch up button to normal."""
+        """Stop the spinner and restore the link."""
         if self._catchup_job is not None:
             self.after_cancel(self._catchup_job)
             self._catchup_job = None
         if self._closing:
             return
-        self._catchup_btn.configure(text="Catch up…", state="normal")
+        self.activity.set_sweeping(False)
 
     def _set_status(self, running: bool) -> None:
-        """Reflect watcher state in the toggle button and the glow border."""
+        """Reflect the watcher's state on the Activity page's status card."""
         if self._closing:
             return
         self._running = running
-        self._start_btn.configure(
-            text="Stop Watcher" if running else "Start Watcher",
-            fg_color=C["red"] if running else C["green"],
-            hover_color=theme.shade(C["red"] if running else C["green"], 0.82),
-        )
-        if running and self._glow_job is None:
-            self._glow_phase = 0
-            self._glow_tick()
-        elif not running and self._glow_job is not None:
-            self.after_cancel(self._glow_job)
-            self._glow_job = None
-            self._glow.configure(border_color=C["border"])
-
-    def _glow_tick(self) -> None:
-        """Pulse the tab-area border green while the watcher runs.
-
-        This runs for as long as the watcher is on - i.e. all day - so it ticks
-        at 200 ms rather than 80 ms (the same ~4s cycle, a third of the
-        redraws) and does no work at all while the window is minimised.
-        """
-        if self._closing:
-            return
-        self._glow_phase = (self._glow_phase + 1) % _GLOW_STEPS
-        try:
-            visible = self.state() == "normal"
-        except Exception:                      # window already going away
-            visible = False
-        if visible:
-            t = (math.sin(self._glow_phase / _GLOW_STEPS * 2 * math.pi) + 1) / 2  # 0..1
-            self._glow.configure(border_color=theme.shade(C["green"], 0.55 + 0.95 * t))
-        self._glow_job = self.after(_GLOW_INTERVAL_MS, self._glow_tick)
-
-    def _refresh_tagline(self) -> None:
-        """Header subtitle showing the selected Service and Accounting systems."""
-        svc = label_for(self.settings.get("service.provider", "servicem8"))
-        acct = label_for(self.settings.get("accounting.provider", "none"))
-        self._tagline.configure(text=f"Outlook  >  {svc}  +  {acct}")
+        self.activity.set_running(running)
 
     def refresh_after_settings(self) -> None:
         """Called by the Settings tab after a save."""
-        self._refresh_tagline()
         self.customers_tab.refresh()
+        self.activity.refresh()
 
     def refresh_logs(self) -> None:
-        """Repaint the activity log from the DB."""
-        self.logs_tab.refresh()
+        """Repaint the Activity page (tiles, problems, recent list and full log)."""
+        self.activity.refresh()
+        self.activity.full_log.refresh()
 
     def _on_close(self) -> None:
         """Tear down in order: stop scheduled callbacks, stop the watcher
@@ -399,13 +351,13 @@ class App(ctk.CTk):
             return
         self._closing = True
 
-        for job in (self._pump_job, self._glow_job, self._catchup_job):
+        for job in (self._pump_job, self._catchup_job):
             if job is not None:
                 try:
                     self.after_cancel(job)
                 except Exception:
                     pass
-        self._pump_job = self._glow_job = self._catchup_job = None
+        self._pump_job = self._catchup_job = None
 
         try:
             self.watcher.stop()          # signals + joins the daemon thread
