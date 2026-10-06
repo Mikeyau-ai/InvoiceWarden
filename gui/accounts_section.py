@@ -37,7 +37,7 @@ class AccountsSection:
         self._status = status
         self._rows: list[dict] = []
 
-        self.frame = ctk.CTkFrame(parent, fg_color=C["bg"])
+        self.frame = ctk.CTkFrame(parent, fg_color="transparent")
         self.frame.pack(fill="x")
         self.refresh()
 
@@ -58,12 +58,13 @@ class AccountsSection:
         self._rows = []
 
         accounts = self._db.list_mail_accounts()
-        head = ctk.CTkFrame(self.frame, fg_color=C["bg"])
-        head.pack(fill="x", padx=6, pady=(16, 4))
-        ctk.CTkLabel(head, text=f"Email accounts  ({len(accounts)}/{MAX_MAIL_ACCOUNTS})",
-                     font=FONT_HEAD, text_color=C["blue"]).pack(side="left")
-        add = accent_button(ctk, head, "+ Add an email account", self._add,
-                            colour=C["green"])
+        head = ctk.CTkFrame(self.frame, fg_color="transparent")
+        head.pack(fill="x", padx=6, pady=(10, 2))
+        ctk.CTkLabel(head, text=(f"Mailboxes  ({len(accounts)} of {MAX_MAIL_ACCOUNTS})"
+                                 if accounts else "Mailboxes"),
+                     font=FONT_HEAD, text_color=C["teal"]).pack(side="left")
+        add = accent_button(ctk, head, "+ Add a mailbox", self._add,
+                            colour=C["btn_off"])
         add.pack(side="right")
         accent_button(ctk, head, "Setup guide", self._guide,
                       colour=C["btn_off"], width=100).pack(side="right", padx=8)
@@ -73,8 +74,8 @@ class AccountsSection:
 
         if not accounts:
             ctk.CTkLabel(self.frame,
-                         text="No mailboxes yet - click '+ Add an email account'. "
-                              "Until then the single-mailbox settings below are used.",
+                         text="Using your mailbox below. Add mailboxes here only if "
+                              "invoices arrive in more than one inbox.",
                          font=FONT_UI, text_color=C["dim"], anchor="w",
                          justify="left", wraplength=760).pack(anchor="w", padx=6)
             return
@@ -84,10 +85,10 @@ class AccountsSection:
 
     def _build_row(self, row) -> None:
         """One mailbox card: address, backend, per-backend fields, actions."""
-        card = ctk.CTkFrame(self.frame, fg_color=C["panel"])
+        card = ctk.CTkFrame(self.frame, fg_color=C["row"])
         card.pack(fill="x", padx=6, pady=4)
 
-        top = ctk.CTkFrame(card, fg_color=C["panel"])
+        top = ctk.CTkFrame(card, fg_color=C["row"])
         top.pack(fill="x", padx=10, pady=(8, 2))
 
         enabled = ctk.CTkSwitch(top, text="", width=44)
@@ -108,14 +109,14 @@ class AccountsSection:
         folder.pack(side="left", padx=8)
 
         accent_button(ctk, top, "Remove", lambda r=row: self._remove(r),
-                      colour=C["red"], width=80).pack(side="right")
+                      colour=C["btn_off"], width=80).pack(side="right")
 
         entry = {"id": row["id"], "enabled": enabled, "address": address,
                  "backend": backend, "folder": folder}
 
         # IMAP needs server + credentials on their own line.
         if (row["backend"] or "") == "imap":
-            imap = ctk.CTkFrame(card, fg_color=C["panel"])
+            imap = ctk.CTkFrame(card, fg_color=C["row"])
             imap.pack(fill="x", padx=10, pady=(0, 4))
             entry["imap_host"] = self._mini(imap, "Server", row["imap_host"], 190)
             entry["imap_port"] = self._mini(imap, "Port", row["imap_port"] or "993", 60)
@@ -124,12 +125,12 @@ class AccountsSection:
                 imap, "App password",
                 self._settings.decrypt_value(row["imap_password"]), 170, secret=True)
 
-        actions = ctk.CTkFrame(card, fg_color=C["panel"])
+        actions = ctk.CTkFrame(card, fg_color=C["row"])
         actions.pack(fill="x", padx=10, pady=(0, 8))
         accent_button(ctk, actions, "Save", lambda r=row: self._save_row_then_refresh(r),
-                      colour=C["green"], width=80).pack(side="left")
+                      colour=C["teal_btn"], width=80).pack(side="left")
         accent_button(ctk, actions, "Test", lambda r=row: self._test(r),
-                      colour=C["blue"], width=80).pack(side="left", padx=8)
+                      colour=C["btn_off"], width=80).pack(side="left", padx=8)
         if (row["backend"] or "") == "graph":
             accent_button(ctk, actions, "Sign in", lambda r=row: self._sign_in(r),
                           colour=C["purple"], width=90).pack(side="left")
@@ -137,7 +138,7 @@ class AccountsSection:
             ctk.CTkLabel(actions,
                          text=f"signed in as {who}" if who else "not signed in",
                          font=FONT_UI,
-                         text_color=C["green"] if who else C["yellow"]
+                         text_color=C["teal"] if who else C["amber"]
                          ).pack(side="left", padx=10)
 
         ctk.CTkLabel(card, text=_HINTS.get(row["backend"] or "", ""), font=FONT_UI,
@@ -188,14 +189,14 @@ class AccountsSection:
         if w:
             self._persist(w)
         self.refresh()
-        self._status.configure(text="Mailbox saved.", text_color=C["green"])
+        self._status.configure(text="Mailbox saved.", text_color=C["teal"])
 
     def _add(self) -> None:
         """Append a new empty mailbox, up to the cap."""
         if len(self._db.list_mail_accounts()) >= MAX_MAIL_ACCOUNTS:
             self._status.configure(
                 text=f"Maximum of {MAX_MAIL_ACCOUNTS} mailboxes reached.",
-                text_color=C["yellow"])
+                text_color=C["amber"])
             return
         self.save_all()          # don't lose edits in the other rows
         self._db.add_mail_account(backend="graph", folder="Inbox")
@@ -208,7 +209,7 @@ class AccountsSection:
         """Delete a mailbox and its stored credentials."""
         self._db.delete_mail_account(row["id"])
         self.refresh()
-        self._status.configure(text="Mailbox removed.", text_color=C["yellow"])
+        self._status.configure(text="Mailbox removed.", text_color=C["amber"])
 
     def _signed_in_as(self, row) -> str:
         """Account name cached for this Graph mailbox, or ''."""
@@ -250,7 +251,7 @@ class AccountsSection:
                 msgs = backend.fetch(since=None, unread_only=False,
                                      allowed_ext=set(), headers_only=True)
                 detail = getattr(backend, "last_scan", "") or f"{len(msgs)} message(s)."
-                text, colour = f"[{label}] {detail}", (C["green"] if msgs else C["yellow"])
+                text, colour = f"[{label}] {detail}", (C["teal"] if msgs else C["amber"])
             except Exception as exc:
                 text, colour = f"[{label}] {exc}", C["red"]
             try:

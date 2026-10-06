@@ -1,10 +1,14 @@
-"""Settings tab.
+"""Settings window.
 
-Layout:
-  * Deployment - three dropdowns: Service system, Accounting system, AI Provider.
-  * Credential sections are rendered DYNAMICALLY - only the fields for the
-    currently-selected service system, accounting system, Outlook backend and
-    AI provider are shown. Changing a dropdown re-renders in place.
+Layout, as cards:
+  * Email - the mailboxes to watch (or the single mailbox), how to read them, Test.
+  * Where invoices go - the service system and the accounting system, each with Test.
+  * AI - which AI reads the invoices, its key, Test.
+  * General - start with Windows, turn on when opened, unread emails only.
+  * Advanced (folded) - check interval, attachment cache, new-supplier confidence,
+    AI model name, updates.
+Credential fields are rendered DYNAMICALLY - only the fields for the currently
+selected systems are shown. Changing a dropdown re-renders in place.
 
 Secrets are Fernet-encrypted by :class:`Settings`; hidden providers keep their
 stored values (switching back reveals them again).
@@ -26,6 +30,15 @@ from integrations.registry import (
     SERVICE_PROVIDERS,
     build_provider,
 )
+
+#: Plain-English names for the three ways of reading mail (stored as com/graph/imap).
+BACKEND_LABELS = {
+    "com": "Outlook app on this PC (classic Outlook)",
+    "graph": "Microsoft 365 / Outlook.com (sign in)",
+    "imap": "Other email: Gmail, Fastmail, iCloud... (IMAP)",
+}
+
+_FONT_CARD = ("Segoe UI Semibold", 15)
 
 #: Canonical device-code sign-in page (works for personal and work accounts).
 DEVICE_LOGIN_URL = "https://microsoft.com/devicelogin"
@@ -81,18 +94,29 @@ class _StatusProxy:
             pass
 
 
+class _Fixed:
+    """Stands in for the mail-reading dropdown when it isn't shown (``.get()`` only)."""
+
+    def __init__(self, value: str) -> None:
+        """Remember the label the dropdown would have shown."""
+        self._value = value
+
+    def get(self) -> str:
+        """The remembered label."""
+        return self._value
+
+
 class SettingsTab:
     """Builds and manages the Settings tab widgets."""
 
     def __init__(self, parent, app) -> None:
-        """Build the scrolling form plus its pinned action footer."""
+        """Build the scrolling cards plus the pinned Save footer."""
         self._app = app
         self._settings = app.settings
         self._fields: dict[str, ctk.CTkEntry] = {}
 
-        # Root splits into a fixed footer (always-visible action bar + status)
-        # and the scrolling body above it, so the buttons can never be pushed
-        # off-screen by a long form or a multi-line status message.
+        # Root splits into a fixed footer (Save + status) and the scrolling body
+        # above it, so Save can never be pushed off-screen.
         self._root = ctk.CTkFrame(parent, fg_color=C["bg"])
         self._root.pack(fill="both", expand=True)
         self._footer = ctk.CTkFrame(self._root, fg_color=C["panel"], corner_radius=0)
@@ -100,21 +124,11 @@ class SettingsTab:
         self.frame = ctk.CTkScrollableFrame(self._root, fg_color=C["bg"])
         self.frame.pack(side="top", fill="both", expand=True)
 
-        self._build_deployment()
-        # Dynamic containers - repopulated by _render().
-        self._svc_box = ctk.CTkFrame(self.frame, fg_color=C["bg"])
-        self._svc_box.pack(fill="x")
-        self._acct_box = ctk.CTkFrame(self.frame, fg_color=C["bg"])
-        self._acct_box.pack(fill="x")
-        self._accounts_box = ctk.CTkFrame(self.frame, fg_color=C["bg"])
-        self._accounts_box.pack(fill="x")
-        self._outlook_box = ctk.CTkFrame(self.frame, fg_color=C["bg"])
-        self._outlook_box.pack(fill="x")
-        self._ai_box = ctk.CTkFrame(self.frame, fg_color=C["bg"])
-        self._ai_box.pack(fill="x")
-
-        self._build_watcher()
-        self._build_updates()
+        self._build_email_card()
+        self._build_destinations_card()
+        self._build_ai_card()
+        self._build_general_card()
+        self._build_advanced()
         self._build_actions()
 
         from gui.accounts_section import AccountsSection
@@ -122,97 +136,145 @@ class SettingsTab:
         self.accounts = AccountsSection(self._accounts_box, app, self._status)
         self.load()
 
-    # -- static: deployment selectors ---------------------------
-    def _build_deployment(self) -> None:
-        """The three provider dropdowns that drive every dynamic section."""
-        self._header(self.frame, "Deployment")
+    # -- cards --------------------------------------------------
+    def _card(self, title: str, blurb: str = ""):
+        """A rounded card with a title and a one-line explanation; returns its body."""
+        card = ctk.CTkFrame(self.frame, fg_color=C["panel"], corner_radius=8)
+        card.pack(fill="x", padx=8, pady=(10, 0))
+        ctk.CTkLabel(card, text=title, font=_FONT_CARD, text_color=C["text"],
+                     anchor="w").pack(fill="x", padx=14, pady=(12, 0))
+        if blurb:
+            ctk.CTkLabel(card, text=blurb, font=FONT_UI, text_color=C["dim"], anchor="w",
+                         justify="left", wraplength=720).pack(fill="x", padx=14)
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(fill="x", padx=8, pady=(4, 10))
+        return body
+
+    def _buttons(self, parent, buttons) -> None:
+        """A row of small buttons (Test, Setup guide...) at the bottom of a card."""
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=6, pady=(8, 0))
+        for label, cmd in buttons:
+            accent_button(ctk, row, label, cmd, colour=C["btn_off"]).pack(side="left", padx=(0, 8))
+
+    def _build_email_card(self) -> None:
+        """Mailboxes (list) and the single-mailbox fields with how to read them."""
+        body = self._card("Email", "The inbox (or inboxes) your suppliers send invoices to.")
+        self._accounts_box = ctk.CTkFrame(body, fg_color="transparent")
+        self._accounts_box.pack(fill="x")
+        self._outlook_box = ctk.CTkFrame(body, fg_color="transparent")
+        self._outlook_box.pack(fill="x")
+        self._buttons(body, [("Test mailbox", self._test_outlook)])
+
+    def _build_destinations_card(self) -> None:
+        """Service system and accounting system, each with its own fields."""
+        body = self._card("Where invoices go",
+                          "Where filed invoices are sent. Each supplier can be switched "
+                          "on or off for each one on the Suppliers page.")
         self._service = self._dropdown(
-            self.frame, "Service system",
+            body, "Service system",
             [c.label for c in SERVICE_PROVIDERS.values()], self._render)
+        self._svc_box = ctk.CTkFrame(body, fg_color="transparent")
+        self._svc_box.pack(fill="x")
         self._accounting = self._dropdown(
-            self.frame, "Accounting system",
+            body, "Accounting system",
             [c.label for c in ACCOUNTING_PROVIDERS.values()], self._render)
+        self._acct_box = ctk.CTkFrame(body, fg_color="transparent")
+        self._acct_box.pack(fill="x")
+
+    def _build_ai_card(self) -> None:
+        """Which AI reads the invoices, and its key."""
+        body = self._card("AI", "Reads each invoice to find the supplier, invoice number "
+                                "and job number.")
         self._ai_provider = self._dropdown(
-            self.frame, "AI Provider",
+            body, "AI provider",
             [m["label"] for m in AI_PROVIDERS.values()], self._render)
+        self._ai_box = ctk.CTkFrame(body, fg_color="transparent")
+        self._ai_box.pack(fill="x")
+        self._buttons(body, [("Test AI", self._test_ai)])
 
-    def _build_watcher(self) -> None:
-        """Poll interval, cache retention and the watcher toggles."""
-        self._header(self.frame, "Watcher")
-        wrap = ctk.CTkFrame(self.frame, fg_color=C["bg"])
-        wrap.pack(fill="x", padx=6, pady=3)
-        ctk.CTkLabel(wrap, text="Poll interval (minutes)", font=FONT_UI,
-                     text_color=C["text"], width=250, anchor="w").pack(side="left")
-        self._poll = ctk.CTkEntry(wrap, width=80)
-        self._poll.pack(side="left")
-
-        cache_row = ctk.CTkFrame(self.frame, fg_color=C["bg"])
-        cache_row.pack(fill="x", padx=6, pady=3)
-        ctk.CTkLabel(cache_row, text="Keep cached attachments (days)", font=FONT_UI,
-                     text_color=C["text"], width=250, anchor="w").pack(side="left")
-        self._cache_days = ctk.CTkEntry(cache_row, width=80)
-        self._cache_days.pack(side="left")
-        self._note(self.frame,
-                   "Downloaded attachments are kept this long so a failed upload "
-                   "can still be retried, then deleted. 0 disables the cleanup.")
-
-        conf_row = ctk.CTkFrame(self.frame, fg_color=C["bg"])
-        conf_row.pack(fill="x", padx=6, pady=3)
-        ctk.CTkLabel(conf_row, text="Min confidence to add a supplier", font=FONT_UI,
-                     text_color=C["text"], width=250, anchor="w").pack(side="left")
-        self._min_conf = ctk.CTkEntry(conf_row, width=80)
-        self._min_conf.pack(side="left")
-        self._note(self.frame,
-                   "0 to 1. Below this, a supplier the app has never seen is NOT "
-                   "created automatically - the invoice is held for you instead. "
-                   "Invoices for suppliers already on file are unaffected.")
-
-        self._unread_only = ctk.CTkSwitch(
-            self.frame,
-            text="Only process UNREAD emails  (off = every invoice since the last check)")
-        self._unread_only.pack(anchor="w", padx=6, pady=4)
-        self._autostart = ctk.CTkSwitch(self.frame, text="Start watcher automatically on app launch")
-        self._autostart.pack(anchor="w", padx=6, pady=4)
-        self._run_startup = ctk.CTkSwitch(self.frame, text="Run InvoiceM8 on Windows startup")
+    def _build_general_card(self) -> None:
+        """The everyday switches."""
+        body = self._card("General")
+        self._run_startup = ctk.CTkSwitch(body, text="Start with Windows")
         self._run_startup.pack(anchor="w", padx=6, pady=4)
+        self._autostart = ctk.CTkSwitch(body, text="Turn on automatically when the app opens")
+        self._autostart.pack(anchor="w", padx=6, pady=4)
+        self._unread_only = ctk.CTkSwitch(
+            body, text="Only unread emails  (off = every email since the last check)")
+        self._unread_only.pack(anchor="w", padx=6, pady=4)
 
-    def _build_updates(self) -> None:
+    def _build_advanced(self) -> None:
+        """Folded section: tuning numbers, AI model name and updates."""
+        self._adv_btn = ctk.CTkButton(self.frame, text="Advanced  ▸", width=10, height=28,
+                                      fg_color="transparent", hover_color=C["row"],
+                                      text_color=C["teal"], font=FONT_UI, anchor="w",
+                                      command=self._toggle_advanced)
+        self._adv_btn.pack(anchor="w", padx=8, pady=(12, 0))
+        self._adv = ctk.CTkFrame(self.frame, fg_color=C["panel"], corner_radius=8)
+        adv = ctk.CTkFrame(self._adv, fg_color="transparent")
+        adv.pack(fill="x", padx=8, pady=8)
+
+        def number(label: str) -> ctk.CTkEntry:
+            """One labelled number box."""
+            wrap = ctk.CTkFrame(adv, fg_color="transparent")
+            wrap.pack(fill="x", padx=6, pady=3)
+            ctk.CTkLabel(wrap, text=label, font=FONT_UI, text_color=C["text"],
+                         width=250, anchor="w").pack(side="left")
+            entry = ctk.CTkEntry(wrap, width=80)
+            entry.pack(side="left")
+            return entry
+
+        self._poll = number("Check email every (minutes)")
+        self._cache_days = number("Keep downloaded attachments (days)")
+        self._note(adv, "Kept so a failed upload can still be retried, then deleted. "
+                        "0 keeps them forever.")
+        self._min_conf = number("New-supplier confidence (0 to 1)")
+        self._note(adv, "Below this, a supplier the app has never seen isn't added "
+                        "automatically; the invoice waits in Needs attention instead.")
+        self._ai_model_box = ctk.CTkFrame(adv, fg_color="transparent")
+        self._ai_model_box.pack(fill="x")
+        self._build_updates(adv)
+
+    def _toggle_advanced(self) -> None:
+        """Fold or unfold the Advanced section."""
+        if self._adv.winfo_ismapped():
+            self._adv.pack_forget()
+            self._adv_btn.configure(text="Advanced  ▸")
+        else:
+            self._adv.pack(fill="x", padx=8, pady=(4, 10))
+            self._adv_btn.configure(text="Advanced  ▾")
+
+    def _build_updates(self, parent) -> None:
         """Version line, auto-update toggle and the manual check button."""
         from core import updater
         from version import APP_VERSION
 
-        self._header(self.frame, "Updates")
-        ctk.CTkLabel(self.frame, text=f"Current version: {APP_VERSION}"
+        self._header(parent, "Updates")
+        ctk.CTkLabel(parent, text=f"Version {APP_VERSION}"
                      + ("" if updater.is_frozen() else "  (running from source)"),
                      font=FONT_UI, text_color=C["dim"]).pack(anchor="w", padx=6)
         self._auto_update = ctk.CTkSwitch(
-            self.frame, text="Automatically check for updates on launch",
+            parent, text="Check for updates when the app opens",
             command=lambda: updater.set_enabled(bool(self._auto_update.get())))
         self._auto_update.pack(anchor="w", padx=6, pady=4)
-        row = ctk.CTkFrame(self.frame, fg_color=C["bg"])
-        row.pack(fill="x", padx=6, pady=2)
-        accent_button(ctk, row, "Check for updates now",
-                      lambda: self._app.check_updates_now(
-                          lambda t: self._status.configure(text=t, text_color=C["dim"])),
-                      colour=C["blue"]).pack(side="left")
-        accent_button(ctk, row, "About / Changelog", self._app.open_about,
-                      colour=C["btn_off"]).pack(side="left", padx=8)
+        self._buttons(parent, [
+            ("Check for updates now", lambda: self._app.check_updates_now(
+                lambda t: self._status.configure(text=t, text_color=C["dim"]))),
+            ("About / what's new", self._app.open_about)])
 
     def _build_actions(self) -> None:
-        """Fixed footer: action buttons plus a scrollable status/diagnostic box."""
+        """Fixed footer: Save, the combined setup guide, and a status/diagnostic box."""
         bar = ctk.CTkFrame(self._footer, fg_color=C["panel"])
         bar.pack(fill="x", padx=6, pady=(8, 4))
-        accent_button(ctk, bar, "Save settings", self._save, colour=C["green"]).pack(side="left")
-        accent_button(ctk, bar, "Test service", self._test_service, colour=C["blue"]).pack(side="left", padx=8)
-        accent_button(ctk, bar, "Test accounting", self._test_accounting, colour=C["blue"]).pack(side="left")
-        accent_button(ctk, bar, "Test mailbox", self._test_outlook, colour=C["blue"]).pack(side="left", padx=8)
-        accent_button(ctk, bar, "Test AI", self._test_ai, colour=C["blue"]).pack(side="left")
-        accent_button(ctk, bar, "Authorise OAuth", self._oauth, colour=C["purple"]).pack(side="left", padx=(8, 0))
-        accent_button(ctk, bar, "Setup guide (all)", self._open_full_guide, colour=C["btn_off"]).pack(side="left", padx=8)
+        accent_button(ctk, bar, "Save", self._save, colour=C["teal_btn"],
+                      width=120).pack(side="left")
+        accent_button(ctk, bar, "Setup guide", self._open_full_guide,
+                      colour=C["btn_off"]).pack(side="left", padx=8)
 
         # A textbox rather than a label: diagnostics can be several lines, and
         # this wraps, scrolls and can be selected/copied.
-        self._status_box = ctk.CTkTextbox(self._footer, height=72, wrap="word",
+        self._status_box = ctk.CTkTextbox(self._footer, height=56, wrap="word",
                                           font=FONT_UI, fg_color=C["row"],
                                           text_color=C["dim"])
         self._status_box.pack(fill="x", padx=6, pady=(0, 8))
@@ -222,9 +284,9 @@ class SettingsTab:
     # -- widget helpers ----------------------------------------
     def _header(self, parent, text: str, guide_key: str | None = None) -> None:
         """Section heading, optionally with a 'Setup guide' button on the right."""
-        row = ctk.CTkFrame(parent, fg_color=C["bg"])
-        row.pack(fill="x", padx=6, pady=(16, 4))
-        ctk.CTkLabel(row, text=text, font=FONT_HEAD, text_color=C["blue"]
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=6, pady=(10, 2))
+        ctk.CTkLabel(row, text=text, font=FONT_HEAD, text_color=C["teal"]
                      ).pack(side="left")
         if guide_key and guide_key in SETUP_GUIDES:
             ctk.CTkButton(
@@ -247,7 +309,7 @@ class SettingsTab:
 
     def _dropdown(self, parent, label: str, values: list[str], on_change) -> ctk.CTkOptionMenu:
         """Labelled option menu that re-renders the form when changed."""
-        wrap = ctk.CTkFrame(parent, fg_color=C["bg"])
+        wrap = ctk.CTkFrame(parent, fg_color="transparent")
         wrap.pack(fill="x", padx=6, pady=3)
         ctk.CTkLabel(wrap, text=label, font=FONT_UI, text_color=C["text"],
                      width=250, anchor="w").pack(side="left")
@@ -257,7 +319,7 @@ class SettingsTab:
 
     def _row(self, parent, key: str, label: str, secret: bool) -> None:
         """One labelled credential entry, pre-filled from settings."""
-        wrap = ctk.CTkFrame(parent, fg_color=C["bg"])
+        wrap = ctk.CTkFrame(parent, fg_color="transparent")
         wrap.pack(fill="x", padx=6, pady=3)
         ctk.CTkLabel(wrap, text=label, font=FONT_UI, text_color=C["text"],
                      width=250, anchor="w").pack(side="left")
@@ -293,7 +355,7 @@ class SettingsTab:
         """Provider preset that fills the host/port fields for the user."""
         from integrations.email_imap import IMAP_PRESETS
 
-        row = ctk.CTkFrame(self._outlook_box, fg_color=C["bg"])
+        row = ctk.CTkFrame(self._outlook_box, fg_color="transparent")
         row.pack(fill="x", padx=6, pady=(6, 2))
         ctk.CTkLabel(row, text="Provider preset", font=FONT_UI,
                      text_color=C["text"], width=250, anchor="w").pack(side="left")
@@ -323,12 +385,12 @@ class SettingsTab:
         from integrations.graph_auth import signed_in_account
 
         who = signed_in_account(self._settings)
-        row = ctk.CTkFrame(self._outlook_box, fg_color=C["bg"])
+        row = ctk.CTkFrame(self._outlook_box, fg_color="transparent")
         row.pack(fill="x", padx=6, pady=(8, 2))
         ctk.CTkLabel(row, text="Microsoft sign-in", font=FONT_UI,
                      text_color=C["text"], width=250, anchor="w").pack(side="left")
         accent_button(ctk, row, "Sign in to Microsoft", self._graph_sign_in,
-                      colour=C["purple"]).pack(side="left")
+                      colour=C["teal_btn"]).pack(side="left")
         if who:
             accent_button(ctk, row, "Sign out", self._graph_sign_out,
                           colour=C["btn_off"]).pack(side="left", padx=8)
@@ -354,81 +416,89 @@ class SettingsTab:
         self._render()
         self._status.configure(text="Signed out of Microsoft.", text_color=C["dim"])
 
+    def _backend_key(self) -> str:
+        """The stored backend key (com/graph/imap) for the dropdown's label."""
+        label = self._outlook_backend.get()
+        for key, text in BACKEND_LABELS.items():
+            if text == label:
+                return key
+        return label if label in BACKEND_LABELS else "com"
+
     def _on_backend_change(self) -> None:
-        """Remember the Outlook backend choice, then re-render."""
-        self._ob_value = self._outlook_backend.get()
+        """Remember the mail-reading choice, then re-render."""
+        self._ob_value = self._backend_key()
         self._render()
 
     def _render(self, *_a) -> None:
         """Rebuild every dynamic credential section from the current dropdowns."""
         # Every credential entry is recreated from settings on each render.
         self._fields = {}
-        for box in (self._svc_box, self._acct_box, self._outlook_box, self._ai_box):
+        for box in (self._svc_box, self._acct_box, self._outlook_box, self._ai_box,
+                    self._ai_model_box):
             for w in box.winfo_children():
                 w.destroy()
 
-        # --- service system ---
-        svc_key = self._provider_key(self._service, SERVICE_PROVIDERS)
-        svc_cls = SERVICE_PROVIDERS[svc_key]
-        self._header(self._svc_box, f"Service system - {svc_cls.label}", guide_key=svc_key)
-        if not svc_cls.setting_fields:
-            self._note(self._svc_box, "No credentials required for this option.")
-        for key, lbl, secret in svc_cls.setting_fields:
-            self._row(self._svc_box, key, lbl, secret)
-        if not svc_cls.implemented and svc_cls.setting_fields:
-            self._note(self._svc_box, "Preview integration - fields are saved, "
-                                      "but uploads are not wired yet.")
+        # --- service system and accounting system ---
+        for box, menu, table, test in (
+                (self._svc_box, self._service, SERVICE_PROVIDERS, self._test_service),
+                (self._acct_box, self._accounting, ACCOUNTING_PROVIDERS, self._test_accounting)):
+            key = self._provider_key(menu, table)
+            cls = table[key]
+            if key == "none":
+                continue
+            for fkey, lbl, secret in cls.setting_fields:
+                self._row(box, fkey, lbl, secret)
+            if not cls.implemented and cls.setting_fields:
+                self._note(box, "Preview integration - fields are saved, "
+                                "but uploads are not wired yet.")
+            buttons = [(f"Test {cls.label}", test)]
+            if getattr(cls, "uses_oauth", False):
+                buttons.append((f"Connect {cls.label}", self._oauth))
+            if key in SETUP_GUIDES:
+                buttons.append(("Setup guide", lambda k=key: GuideWindow(
+                    self._app, [(k, SETUP_GUIDES[k])])))
+            self._buttons(box, buttons)
 
-        # --- accounting system ---
-        acct_key = self._provider_key(self._accounting, ACCOUNTING_PROVIDERS)
-        acct_cls = ACCOUNTING_PROVIDERS[acct_key]
-        self._header(self._acct_box, f"Accounting system - {acct_cls.label}", guide_key=acct_key)
-        if not acct_cls.setting_fields:
-            self._note(self._acct_box, "No credentials required for this option.")
-        for key, lbl, secret in acct_cls.setting_fields:
-            self._row(self._acct_box, key, lbl, secret)
-        if not acct_cls.implemented and acct_cls.setting_fields:
-            self._note(self._acct_box, "Preview integration - fields are saved, "
-                                       "but uploads are not wired yet.")
-
-        # --- Outlook ---
+        # --- mailbox ---
         backend = getattr(self, "_ob_value", None) or self._settings.get("outlook.backend", "com")
-        self._header(self._outlook_box, "Email",
-                     guide_key={"graph": "outlook_graph",
-                                "imap": "outlook_imap"}.get(backend, "outlook_com"))
-        self._outlook_backend = self._dropdown(
-            self._outlook_box, "Backend", ["com", "graph", "imap"],
-            self._on_backend_change)
-        self._outlook_backend.set(backend)
-        self._ob_value = backend
-        for key, lbl, secret in OUTLOOK_COMMON:
-            self._row(self._outlook_box, key, lbl, secret)
-        backend = self._outlook_backend.get()
-        if backend == "com":
-            self._note(self._outlook_box,
-                       "COM reads the CLASSIC Outlook desktop client you are already "
-                       "signed into - no credentials needed. It does NOT work with "
-                       "the new Outlook for Windows (no COM support): use 'graph' "
-                       "for that, and for outlook.com accounts.")
-        for key, lbl, secret in OUTLOOK_BY_BACKEND.get(backend, []):
-            self._row(self._outlook_box, key, lbl, secret)
-        if backend == "graph":
-            self._build_graph_signin()
-        elif backend == "imap":
-            self._build_imap_preset()
-            self._note(self._outlook_box,
-                       "IMAP works with Gmail, Fastmail, Yahoo, iCloud and most "
-                       "business mail hosts using an APP PASSWORD (not your normal "
-                       "password). It does NOT work with outlook.com - Microsoft "
-                       "disabled app passwords for personal accounts in Sept 2024; "
-                       "use 'graph' for those, or auto-forward that mail to a "
-                       "provider listed above. Click 'Setup guide' for the steps.")
+        if self._app.db.list_mail_accounts():
+            # Mailboxes are listed above; the single-mailbox fields no longer apply.
+            self._ob_value = backend
+            self._outlook_backend = _Fixed(BACKEND_LABELS.get(backend, backend))
+        else:
+            self._header(self._outlook_box, "Your mailbox",
+                         guide_key={"graph": "outlook_graph",
+                                    "imap": "outlook_imap"}.get(backend, "outlook_com"))
+            self._outlook_backend = self._dropdown(
+                self._outlook_box, "Read email using", list(BACKEND_LABELS.values()),
+                self._on_backend_change)
+            self._outlook_backend.set(BACKEND_LABELS.get(backend, BACKEND_LABELS["com"]))
+            self._ob_value = backend
+            for key, lbl, secret in OUTLOOK_COMMON:
+                self._row(self._outlook_box, key, lbl, secret)
+            if backend == "com":
+                self._note(self._outlook_box,
+                           "Reads the classic Outlook desktop app you're already signed "
+                           "into, so no password is needed. It doesn't work with the new "
+                           "Outlook for Windows: choose Microsoft 365 / Outlook.com for that.")
+            for key, lbl, secret in OUTLOOK_BY_BACKEND.get(backend, []):
+                self._row(self._outlook_box, key, lbl, secret)
+            if backend == "graph":
+                self._build_graph_signin()
+            elif backend == "imap":
+                self._build_imap_preset()
+                self._note(self._outlook_box,
+                           "Works with Gmail, Fastmail, Yahoo, iCloud and most business "
+                           "mail hosts using an app password (not your normal password). "
+                           "Not for outlook.com: use Microsoft 365 / Outlook.com instead.")
 
         # --- AI ---
         akey = self._ai_key()
         meta = AI_PROVIDERS[akey]
-        self._header(self._ai_box, f"AI Provider - {meta['label']}", guide_key=akey)
-        self._row(self._ai_box, "ai.model",
+        if akey in SETUP_GUIDES:
+            self._header(self._ai_box, meta["label"], guide_key=akey)
+        self._header(self._ai_model_box, "AI model")
+        self._row(self._ai_model_box, "ai.model",
                   f"Model name (blank = {meta['default_model'] or 'server default'})", False)
         if meta["needs_base_url"]:
             self._row(self._ai_box, "ai.compat_base_url", "API base URL (ends in /v1)", False)
@@ -470,16 +540,15 @@ class SettingsTab:
             broken = self._settings.unreadable_secrets()
         except Exception:
             return
-        if not broken:
+        # Leftovers from systems that aren't selected don't matter; say nothing about them.
+        in_use = sorted(k for k in broken if k in self._fields)
+        if not in_use:
             return
-        pretty = ", ".join(sorted(broken))
         self._status.configure(
-            text=("STORED CREDENTIALS COULD NOT BE READ. The local encryption "
-                  "key changed, so these saved values are unrecoverable and are "
-                  "being treated as EMPTY: " + pretty + ". Re-enter each one "
-                  "above and click Save settings. Until you do, anything using "
-                  "them will fail with confusing errors."),
-            text_color=C["red"])
+            text=("Some saved keys or passwords couldn't be read on this PC, so they "
+                  "need entering again: " + ", ".join(in_use) + ". Re-enter them above, "
+                  "then Save."),
+            text_color=C["amber"])
 
     def _save(self) -> None:
         """Write every visible field back to the settings store."""
@@ -490,7 +559,7 @@ class SettingsTab:
         self._settings.set("accounting.provider",
                            self._provider_key(self._accounting, ACCOUNTING_PROVIDERS))
         self._settings.set("ai.provider", self._ai_key())
-        self._settings.set("outlook.backend", self._outlook_backend.get())
+        self._settings.set("outlook.backend", self._backend_key())
         self._settings.set("watcher.poll_minutes", self._poll.get() or "5")
         self._settings.set("customers.min_confidence", self._min_conf.get() or "0.4")
         self._settings.set("watcher.cache_days", self._cache_days.get() or "30")
@@ -504,7 +573,7 @@ class SettingsTab:
         if getattr(self, "accounts", None):
             self.accounts.save_all()
         self._app.refresh_after_settings()
-        self._status.configure(text="Settings saved.", text_color=C["green"])
+        self._status.configure(text="Saved.", text_color=C["teal"])
 
     # -- tests / oauth --------------------------------------
     def _run_test(self, busy: str, work) -> None:
@@ -536,7 +605,7 @@ class SettingsTab:
         def work():
             """Worker: call the provider's own connection check."""
             res = build_provider(key, self._settings).test_connection()
-            return res.detail, C["green"] if res.ok else C["red"]
+            return res.detail, C["teal"] if res.ok else C["red"]
 
         self._run_test("Testing the service system...", work)
 
@@ -548,7 +617,7 @@ class SettingsTab:
         def work():
             """Worker: call the provider's own connection check."""
             res = build_provider(key, self._settings).test_connection()
-            return res.detail, C["green"] if res.ok else C["red"]
+            return res.detail, C["teal"] if res.ok else C["red"]
 
         self._run_test("Testing the accounting system...", work)
 
@@ -568,7 +637,7 @@ class SettingsTab:
             msgs = backend.fetch(since=None, unread_only=unread_only,
                                  allowed_ext=set(), headers_only=True)
             detail = getattr(backend, "last_scan", "") or f"{len(msgs)} message(s) found."
-            return f"Mailbox OK - {detail}", C["green"] if msgs else C["yellow"]
+            return f"Mailbox OK - {detail}", C["teal"] if msgs else C["amber"]
 
         self._run_test("Testing the mailbox connection...", work)
 
@@ -583,7 +652,7 @@ class SettingsTab:
         def work():
             """Worker: send the synthetic invoice and grade the reply."""
             ok, detail = test_ai_provider(self._settings)
-            return detail, C["green"] if ok else C["red"]
+            return detail, C["teal"] if ok else C["red"]
 
         self._run_test("Sending a test invoice to the AI provider...", work)
 
