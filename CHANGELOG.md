@@ -3,7 +3,7 @@
 All notable changes to InvoiceWarden (called InvoiceM8 until 2026-10). Newest first.
 Bump `version.py` and add an entry here for every release.
 
-## Unreleased: InvoiceWarden (not published yet)
+## 1.1.0 (pre-release for testing; not yet the Latest release)
 - **New name: InvoiceWarden**, from Sixth Day Studios ("M8" clashed with ServiceM8). On first
   start the old `%LOCALAPPDATA%\InvoiceM8` folder is copied to `%LOCALAPPDATA%\InvoiceWarden`
   (the old one is kept as a backup), so suppliers, history, mailboxes and saved keys all carry
