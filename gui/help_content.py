@@ -156,7 +156,7 @@ FIELD_HELP: dict[str, str] = {
         "Folder display name to scan. 'Inbox' by default; use the exact name "
         "for a sub-folder or rule target.",
     "outlook.graph_client_id":
-        "OPTIONAL - leave blank. InvoiceM8 ships with its own Application "
+        "OPTIONAL - leave blank. InvoiceWarden ships with its own Application "
         "(client) ID, so no Azure setup is needed: just add an email account "
         "and click 'Sign in'. Only fill this in if your organisation requires "
         "its own app registration; see the Setup guide for how to create one.",
@@ -365,14 +365,14 @@ SETUP_GUIDES: dict[str, str] = {
         "Microsoft's device-login page. Enter the code, sign in as that "
         "mailbox, approve the permission.\n"
         "4. The row then shows 'signed in as ...'. Click Test.\n"
-        "InvoiceM8 ships with its own Application (client) ID, so customers "
+        "InvoiceWarden ships with its own Application (client) ID, so customers "
         "never touch the Azure portal. Each mailbox needs its OWN sign-in - "
         "repeat for every account, up to 10.\n\n"
         "Notes:\n"
         "- The browser may finish on a Microsoft page saying 'This is not the "
         "right page'. That is that redirect target's normal behaviour; the "
         "sign-in window shows the real result.\n"
-        "- A work/school tenant may ask an administrator to approve InvoiceM8 "
+        "- A work/school tenant may ask an administrator to approve InvoiceWarden "
         "once for the organisation. That is a normal consent prompt.\n"
         "- Sign-ins are stored encrypted on this PC and refresh themselves.\n\n"
         "OPTIONAL - use your own app registration instead:\n"
@@ -425,7 +425,7 @@ SETUP_GUIDES: dict[str, str] = {
         "not exist yet.\n\n"
         "CREDIT NOTES\n"
         "Credits usually carry NO job number - they quote the invoice being\n"
-        "credited. InvoiceM8 records which job every invoice was filed against,\n"
+        "credited. InvoiceWarden records which job every invoice was filed against,\n"
         "so a credit is linked by:\n"
         "  1. matching the invoice number it quotes to an invoice already\n"
         "     uploaded, and using that job; failing that\n"
@@ -460,7 +460,7 @@ SETUP_GUIDES: dict[str, str] = {
     ),
     "email_accounts": (
         "Email accounts - monitoring more than one mailbox\n"
-        "InvoiceM8 can watch up to 10 mailboxes. Settings > Email accounts > "
+        "InvoiceWarden can watch up to 10 mailboxes. Settings > Email accounts > "
         "'+ Add an email account' adds a row; each row has its own address, "
         "backend and credentials.\n\n"
         "Why credentials are per-account, not shared:\n"
@@ -490,8 +490,8 @@ SETUP_GUIDES: dict[str, str] = {
         "1. myaccount.google.com > Security > turn ON 2-Step Verification "
         "(app passwords are unavailable without it).\n"
         "2. Go to myaccount.google.com/apppasswords\n"
-        "3. Name it 'InvoiceM8' and Create. Copy the 16-character password.\n"
-        "4. In InvoiceM8: IMAP server imap.gmail.com, Port 993, Username your "
+        "3. Name it 'InvoiceWarden' and Create. Copy the 16-character password.\n"
+        "4. In InvoiceWarden: IMAP server imap.gmail.com, Port 993, Username your "
         "full Gmail address, App password the 16 characters (spaces are fine), "
         "Folder INBOX.\n"
         "5. Save settings, then Test mailbox.\n\n"
@@ -509,7 +509,7 @@ SETUP_GUIDES: dict[str, str] = {
         "Outlook.com that auto-forwards invoice emails to a Gmail address and "
         "point IMAP at that instead.\n\n"
         "Notes:\n"
-        "- Mail is read with BODY.PEEK, so InvoiceM8 never marks your messages "
+        "- Mail is read with BODY.PEEK, so InvoiceWarden never marks your messages "
         "as read.\n"
         "- Only emails WITH attachments are queued; plain emails are ignored."
     ),

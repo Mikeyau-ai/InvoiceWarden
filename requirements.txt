@@ -1,4 +1,4 @@
-# InvoiceM8 - local Windows invoice automation
+# InvoiceWarden - local Windows invoice automation
 customtkinter==5.2.2
 Pillow>=10.0.0
 cryptography>=42.0.0

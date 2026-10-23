@@ -1,4 +1,4 @@
-"""InvoiceM8 entry point.
+"""InvoiceWarden entry point.
 
     python main.py              # normal launch
     python main.py --autostart  # used by the Windows "Run on startup" entry:
@@ -13,6 +13,7 @@ from logging.handlers import RotatingFileHandler
 import customtkinter as ctk
 
 from config import LOG_DIR, DB_PATH, ensure_dirs
+from core import migrate
 from core.crypto import SecretBox
 from core.database import Database
 from core.settings_store import Settings
@@ -31,7 +32,7 @@ def _setup_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         handlers=[
-            RotatingFileHandler(LOG_DIR / "invoicem8.log", encoding="utf-8",
+            RotatingFileHandler(LOG_DIR / "invoicewarden.log", encoding="utf-8",
                                 maxBytes=2_000_000, backupCount=3),
             logging.StreamHandler(sys.stdout),
         ],
@@ -40,6 +41,7 @@ def _setup_logging() -> None:
 
 def main() -> None:
     """Build the DB/settings/theme and run the Tk event loop."""
+    migrate.run()          # one-time carry-over from the InvoiceM8 era; must precede everything
     _setup_logging()
     autostart = "--autostart" in sys.argv
 

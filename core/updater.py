@@ -1,7 +1,7 @@
-"""Self-update for frozen InvoiceM8 builds.
+"""Self-update for frozen InvoiceWarden builds.
 
 Mirrors the updater pattern used by the other apps (RamBo / Ashen Fall):
-check GitHub Releases for a newer ``InvoiceM8.exe``, download it, and swap it
+check GitHub Releases for a newer ``InvoiceWarden.exe``, download it, and swap it
 in via a detached helper script (a running exe cannot overwrite itself).
 
 * Stdlib only (urllib / json / threading) - adds nothing to requirements and
@@ -24,13 +24,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Public repo whose Releases host the build. Overridable for testing.
-GITHUB_REPO = os.getenv("INVOICEM8_UPDATE_REPO", "Mikeyau-ai/Invoicem8")
+GITHUB_REPO = os.getenv("INVOICEWARDEN_UPDATE_REPO", "Mikeyau-ai/InvoiceWarden")
 _API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-_ASSET_NAME = "InvoiceM8.exe"
-_UA = "InvoiceM8-Updater"
+_ASSET_NAME = "InvoiceWarden.exe"
+_ASSET_NAMES = (_ASSET_NAME.lower(), "invoicem8.exe")   # legacy name kept for old releases
+_UA = "InvoiceWarden-Updater"
 _CHECK_TIMEOUT = 8
 
-USER_ROOT = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "InvoiceM8"
+USER_ROOT = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "InvoiceWarden"
 _UPDATE_DIR = USER_ROOT / "updates"
 _STATE = USER_ROOT / "updater.json"
 
@@ -182,7 +183,7 @@ def _fetch_latest(*, strict: bool = False) -> UpdateInfo | None:
             raise UpdateCheckError("GitHub reported no published release")
         return None
     for asset in data.get("assets") or []:
-        if (asset.get("name") or "").lower() == _ASSET_NAME.lower():
+        if (asset.get("name") or "").lower() in _ASSET_NAMES:
             return UpdateInfo(
                 version=tag,
                 url=asset.get("browser_download_url") or "",
@@ -256,10 +257,10 @@ def download(info: UpdateInfo, progress_cb=None, cancel=None) -> Path | None:
     polled per chunk. Never leaves a partial file behind.
     """
     _UPDATE_DIR.mkdir(parents=True, exist_ok=True)
-    dest = _UPDATE_DIR / f"InvoiceM8-{info.version}.exe"
+    dest = _UPDATE_DIR / f"InvoiceWarden-{info.version}.exe"
     part = dest.with_suffix(".exe.part")
 
-    for old in _UPDATE_DIR.glob("InvoiceM8-*.exe"):
+    for old in _UPDATE_DIR.glob("InvoiceWarden-*.exe"):
         if old != dest:
             try:
                 old.unlink()
@@ -297,14 +298,14 @@ def download(info: UpdateInfo, progress_cb=None, cancel=None) -> Path | None:
 
 # A running exe can't overwrite itself, so a detached cmd waits for us to exit,
 # copies the new file over, and relaunches. It runs in its OWN VISIBLE console
-# window (CREATE_NEW_CONSOLE) with a clear InvoiceM8 banner and step-by-step
+# window (CREATE_NEW_CONSOLE) with a clear InvoiceWarden banner and step-by-step
 # status, so it can't be mistaken for a stray/malware process - and it holds
 # the window open on a visible countdown before closing so the user can read it.
 # System tools are called by absolute path so a Unix `find`/`ping` on PATH
 # can't shadow the wait loop.
 _APPLY_SCRIPT = r"""@echo off
 setlocal
-title InvoiceM8 Updater  (v{ver})
+title InvoiceWarden Updater  (v{ver})
 mode con: cols=80 lines=32 >nul 2>&1
 color 0A
 
@@ -322,22 +323,22 @@ echo      #   #  ## #   # #   #   #   #    #    #   # #   #
 echo    ##### #   #   #    ###  ##### #### ##### #   #  ###
 echo.
 echo   ============================================================
-echo    InvoiceM8 auto-updater    github.com/Mikeyau-ai/Invoicem8
+echo    InvoiceWarden auto-updater    github.com/Mikeyau-ai/InvoiceWarden
 echo   ============================================================
 echo.
-echo    This window is part of InvoiceM8's built-in updater - it is
+echo    This window is part of InvoiceWarden's built-in updater - it is
 echo    not a background/malware process. It is installing update
 echo    v{ver} in three steps:
 echo.
-echo      1. wait for InvoiceM8 to close
-echo      2. copy the new InvoiceM8.exe into place
-echo      3. restart InvoiceM8
+echo      1. wait for InvoiceWarden to close
+echo      2. copy the new InvoiceWarden.exe into place
+echo      3. restart InvoiceWarden
 echo.
 echo    It closes itself automatically when finished.
 echo   ------------------------------------------------------------
 echo.
 
-echo    [....] Waiting for InvoiceM8 (PID {pid}) to close...
+echo    [....] Waiting for InvoiceWarden (PID {pid}) to close...
 set /a tries=0
 :wait
 "%TASKLIST%" /fi "PID eq {pid}" /nh 2>nul | "%FIND%" "{pid}" >nul
@@ -348,23 +349,23 @@ if %tries% GEQ 60 goto timedout
 goto wait
 
 :timedout
-echo    [FAIL] InvoiceM8 did not close within 2 minutes - update cancelled.
+echo    [FAIL] InvoiceWarden did not close within 2 minutes - update cancelled.
 echo           Your existing version has NOT been changed. Close
-echo           InvoiceM8 fully and check for updates again.
+echo           InvoiceWarden fully and check for updates again.
 echo.
 echo    This window stays open so you can read the message above.
 "%TIMEOUT%" /t 30 || "%PING%" -n 31 127.0.0.1 >nul
 exit /b 1
 
 :ready
-echo    [ OK ] InvoiceM8 has closed.
+echo    [ OK ] InvoiceWarden has closed.
 "%PING%" -n 3 127.0.0.1 >nul
 echo    [....] Installing v{ver}...
 copy /y "{src}" "{dst}" >nul
 if errorlevel 1 goto copyfail
 echo    [ OK ] New version copied into place.
 del /q "{src}" >nul 2>&1
-echo    [....] Restarting InvoiceM8...
+echo    [....] Restarting InvoiceWarden...
 rem Clear PyInstaller's onefile env vars so the fresh exe starts as a new
 rem top-level process instead of failing the "parent process" security check.
 set "_MEIPASS2="
@@ -375,7 +376,7 @@ set "_PYI_APPLICATION_HOME_DIR="
 set "_PYIBoot_SPLASH="
 set "_PYI_SPLASH_IPC="
 start "" "{dst}"
-echo    [ OK ] Done - InvoiceM8 v{ver} is starting.
+echo    [ OK ] Done - InvoiceWarden v{ver} is starting.
 echo.
 echo   ============================================================
 echo    Update complete. This window will close in 12 seconds.
@@ -387,7 +388,7 @@ exit /b 0
 echo    [FAIL] Could not replace:
 echo             {dst}
 echo           Your existing version has NOT been changed. Another
-echo           copy of InvoiceM8 may still be running, or the file
+echo           copy of InvoiceWarden may still be running, or the file
 echo           is locked. Try updating again in a minute.
 echo.
 echo    This window stays open so you can read the message above.

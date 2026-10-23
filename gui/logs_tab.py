@@ -112,7 +112,7 @@ class LogsTab:
 
     def _configure_tags(self) -> None:
         """Colour lines by outcome/level (matches RamBo's issue colouring)."""
-        for name, colour in (("INFO", C["text"]), ("WARN", C["yellow"]),
+        for name, colour in (("INFO", C["text"]), ("WARN", C["dim"]),
                              ("ERROR", C["red"]), ("SUCCESS", C["green"])):
             self._box.tag_config(name, foreground=colour)
 

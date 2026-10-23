@@ -19,7 +19,8 @@ import os
 import keyring
 from cryptography.fernet import Fernet, InvalidToken
 
-from config import DATA_DIR, KEYRING_SERVICE, KEYRING_USERNAME
+from config import (DATA_DIR, KEYRING_SERVICE, KEYRING_USERNAME,
+                    LEGACY_KEYRING_SERVICE)
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +33,17 @@ def _load_or_create_key() -> bytes:
         existing = keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
         if existing:
             return existing.encode("utf-8")
+        # First launch since the InvoiceM8 -> InvoiceWarden rename: reuse the old
+        # master key (minting a new one would orphan every saved secret). The
+        # old entry is left in place so an older build still works.
+        legacy = keyring.get_password(LEGACY_KEYRING_SERVICE, KEYRING_USERNAME)
+        if legacy:
+            try:
+                keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, legacy)
+            except Exception:                 # still usable this session
+                log.warning("Could not copy the master key to the new "
+                            "credential entry; using the old one.")
+            return legacy.encode("utf-8")
         key = Fernet.generate_key()
         keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, key.decode("utf-8"))
         # Read it straight back: a backend that accepts the write but does not

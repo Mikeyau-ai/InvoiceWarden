@@ -1,6 +1,6 @@
-"""Global paths and constants for InvoiceM8.
+"""Global paths and constants for InvoiceWarden.
 
-Everything the app persists lives under %LOCALAPPDATA%\\InvoiceM8 so the
+Everything the app persists lives under %LOCALAPPDATA%\\InvoiceWarden so the
 project folder stays clean and the data survives a code update.
 """
 from __future__ import annotations
@@ -8,9 +8,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-APP_NAME = "InvoiceM8"
+APP_NAME = "InvoiceWarden"
 
-#: Entra "Application (client) ID" shipped with InvoiceM8 so customers never
+#: Entra "Application (client) ID" shipped with InvoiceWarden so customers never
 #: have to touch Azure. Public-client IDs are not secrets (Thunderbird, Postman
 #: and others ship theirs the same way) - the sign-in still happens against the
 #: user's own Microsoft account, and no client secret exists. A site can still
@@ -26,13 +26,19 @@ if os.name == "nt":
 else:  # allow running/tests on non-Windows
     _base = Path.home() / ".local" / "share"
 
+#: The app used to be called InvoiceM8; core.migrate copies these over once.
+LEGACY_DATA_DIR = _base / "InvoiceM8"
+LEGACY_DB_NAME = "invoicem8.sqlite3"
+LEGACY_KEYRING_SERVICE = "InvoiceM8-master-key"
+LEGACY_RUN_VALUE_NAME = "InvoiceM8"
+
 DATA_DIR = _base / APP_NAME
-DB_PATH = DATA_DIR / "invoicem8.sqlite3"
+DB_PATH = DATA_DIR / "invoicewarden.sqlite3"
 ATTACHMENT_CACHE = DATA_DIR / "attachments"
 LOG_DIR = DATA_DIR / "logs"
 
 # keyring service name under which the Fernet master key is stored (DPAPI-backed).
-KEYRING_SERVICE = "InvoiceM8-master-key"
+KEYRING_SERVICE = f"{APP_NAME}-master-key"
 KEYRING_USERNAME = "fernet"
 
 # Registry key used by the "Run on startup" toggle.

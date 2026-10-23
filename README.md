@@ -1,4 +1,4 @@
-# InvoiceM8
+# InvoiceWarden
 
 Local Windows desktop app that watches an Outlook inbox for invoice emails,
 uses an AI parser to pull the **customer name** and **job / invoice reference**,
@@ -30,8 +30,8 @@ release.bat
 `release.bat` runs the whole pipeline through `release.py`: it runs the test
 suite, then asks two questions -
 
-1. **Build a fresh InvoiceM8.exe?** PyInstaller against `InvoiceM8.spec`,
-   producing a single windowed `dist\InvoiceM8.exe` (~100 MB, no Python needed
+1. **Build a fresh InvoiceWarden.exe?** PyInstaller against `InvoiceWarden.spec`,
+   producing a single windowed `dist\InvoiceWarden.exe` (~100 MB, no Python needed
    on the target). Build from an environment with the full `requirements.txt`
    installed so the AI / Graph / attachment libraries get bundled - the spec
    silently skips any that are missing.
@@ -41,14 +41,14 @@ suite, then asks two questions -
 Scripting overrides: `--yes` (yes to both), `--build-only` (build, never
 publish), `--skip-build` (publish the exe already in `dist\`).
 
-Settings and the database live in `%LOCALAPPDATA%\InvoiceM8`, so the exe stays
+Settings and the database live in `%LOCALAPPDATA%\InvoiceWarden`, so the exe stays
 stateless and can be replaced in place. Installed builds check `releases/latest`
 on launch (and via **Settings > Updates > Check for updates now**), download the
-new `InvoiceM8.exe`, and swap it in via a detached helper. Auto-check can be
+new `InvoiceWarden.exe`, and swap it in via a detached helper. Auto-check can be
 turned off in Settings; running from source never prompts.
 
 Permanent download link:
-`https://github.com/Mikeyau-ai/Invoicem8/releases/latest/download/InvoiceM8.exe`
+`https://github.com/Mikeyau-ai/InvoiceWarden/releases/latest/download/InvoiceWarden.exe`
 
 ## First run
 
@@ -62,7 +62,7 @@ Permanent download link:
 
 ## Data location
 
-`%LOCALAPPDATA%\InvoiceM8\` – `invoicem8.sqlite3`, `attachments\`, `logs\`.
+`%LOCALAPPDATA%\InvoiceWarden\` – `invoicewarden.sqlite3`, `attachments\`, `logs\`.
 
 ## Module map
 

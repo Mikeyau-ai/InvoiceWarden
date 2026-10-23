@@ -1,4 +1,4 @@
-"""SQLite persistence layer for InvoiceM8.
+"""SQLite persistence layer for InvoiceWarden.
 
 One :class:`Database` instance is shared across threads (GUI + watcher), so all
 access goes through a single connection guarded by a lock. Row factory returns
@@ -164,7 +164,7 @@ class _ClosedCursor:
 
 
 class Database:
-    """Serialized access to the InvoiceM8 SQLite file."""
+    """Serialized access to the InvoiceWarden SQLite file."""
 
     def __init__(self, path: Path) -> None:
         """Open (creating if needed) the database and apply the schema."""
@@ -477,6 +477,11 @@ class Database:
     def mark_error_resolved(self, eid: int) -> None:
         """Flag one error row as dealt with."""
         self._exec("UPDATE error_log SET resolved=1 WHERE id=?", (eid,))
+
+    def resolve_all_errors(self) -> int:
+        """Mark every unresolved error as dealt with. Returns how many."""
+        cur = self._exec("UPDATE error_log SET resolved=1 WHERE resolved=0")
+        return int(getattr(cur, "rowcount", 0) or 0)
 
     def bump_error_retry(self, eid: int) -> None:
         """Increment the retry counter on one error row."""

@@ -20,7 +20,7 @@ class UpdateDialog(ctk.CTkToplevel):
         self._info = info
         self._cancel = False
 
-        self.title("InvoiceM8 - Update available")
+        self.title("InvoiceWarden - Update available")
         self.geometry("480x460")
         self.resizable(False, False)
         self.configure(fg_color=C["bg"])
@@ -96,7 +96,7 @@ class UpdateDialog(ctk.CTkToplevel):
             self._update_btn.configure(state="normal", text="Update now")
             return
         self._status.configure(
-            text="Handing off to the InvoiceM8 updater window...",
+            text="Handing off to the InvoiceWarden updater window...",
             text_color=C["green"])
         if updater.apply(path, self._info.version):
             # The updater console now waits for us to exit, swaps the exe and

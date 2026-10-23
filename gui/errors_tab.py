@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import customtkinter as ctk
 
+from tkinter import messagebox
+
 from core.router import Router
 from gui.theme import C, FONT_DATA, FONT_HEAD, FONT_UI, accent_button
 
@@ -26,8 +28,10 @@ class ErrorsTab:
         bar = ctk.CTkFrame(root, fg_color=C["bg"])
         bar.pack(fill="x", pady=(0, 6))
         ctk.CTkLabel(bar, text="Error Log", font=FONT_HEAD,
-                     text_color=C["red"]).pack(side="left", padx=6)
-        accent_button(ctk, bar, "Refresh", self.refresh, colour=C["blue"]).pack(side="left")
+                     text_color=C["dim"]).pack(side="left", padx=6)
+        accent_button(ctk, bar, "Refresh", self.refresh, colour=C["btn_off"]).pack(side="left")
+        accent_button(ctk, bar, "Clear all", self._clear_all,
+                      colour=C["btn_off"]).pack(side="left", padx=6)
         self._show_resolved = ctk.CTkSwitch(bar, text="Show resolved", command=self.refresh)
         self._show_resolved.pack(side="left", padx=10)
 
@@ -51,7 +55,7 @@ class ErrorsTab:
                     f"{r['customer_name'] or '-'} / {r['invoice_ref'] or '-'}  "
                     f"retries={r['retry_count']}")
             ctk.CTkLabel(card, text=head, font=FONT_DATA,
-                         text_color=C["yellow"] if not r["resolved"] else C["dim"],
+                         text_color=C["text"] if not r["resolved"] else C["dim"],
                          anchor="w").pack(fill="x", padx=10, pady=(6, 0))
             ctk.CTkLabel(card, text=r["error"], font=FONT_UI, text_color=C["text"],
                          anchor="w", wraplength=760, justify="left").pack(fill="x", padx=10)
@@ -79,6 +83,19 @@ class ErrorsTab:
             self._db.mark_error_resolved(row["id"])
         self.refresh()
         self._app.refresh_logs()
+
+    def _clear_all(self) -> None:
+        """Dismiss every open warning/error after a confirmation."""
+        if not self._db.list_errors():
+            return
+        if not messagebox.askyesno(
+            "Clear all", "Dismiss every open item without retrying?\n"
+            "Held invoices will not be filed.", icon="warning",
+            parent=self._list.winfo_toplevel(),
+        ):
+            return
+        self._db.resolve_all_errors()
+        self.refresh()
 
     def _dismiss(self, row) -> None:
         """Mark one error handled without retrying it."""

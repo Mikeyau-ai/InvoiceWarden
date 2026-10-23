@@ -1,6 +1,6 @@
 """Decides where a parsed supplier invoice goes and performs the uploads.
 
-InvoiceM8 is an ACCOUNTS PAYABLE tool: it files invoices the business has
+InvoiceWarden is an ACCOUNTS PAYABLE tool: it files invoices the business has
 RECEIVED from its suppliers against the right job. The "customer" tables and
 columns are named from an early misreading of that and are kept for schema
 stability - everything user-facing calls them suppliers.
@@ -123,7 +123,7 @@ class Router:
                        f"add it automatically"
                        if read else
                        "No supplier name could be read from this invoice")
-                self._emit(level="WARN", customer_name=read or "(unknown)",
+                self._emit(level="INFO", customer_name=read or "(unknown)",
                            invoice_ref=parsed.invoice_ref, platform="-",
                            action="queued", filename=path.name,
                            message=f"{why} - add the supplier in the Suppliers "
@@ -203,7 +203,7 @@ class Router:
         # one from a doubtful reading pollutes the list and mis-files invoices.
         floor = self._settings.get_float("customers.min_confidence", 0.4)
         if parsed.confidence < floor:
-            self._emit(level="WARN", customer_name=name,
+            self._emit(level="INFO", customer_name=name,
                        invoice_ref=parsed.invoice_ref, platform="-",
                        action="held",
                        message=f"Supplier '{name}' read with low confidence "

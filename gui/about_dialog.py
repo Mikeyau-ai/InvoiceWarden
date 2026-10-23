@@ -16,7 +16,8 @@ from gui.theme import C, FONT_DATA, FONT_TAGLINE, FONT_UI, FONT_WORDMARK, accent
 from gui.theme import apply_icon
 from version import APP_VERSION
 
-REPO_URL = "https://github.com/Mikeyau-ai/Invoicem8"
+SITE_URL = "https://sixthdaystudios.com/"
+REPO_URL = "https://github.com/Mikeyau-ai/InvoiceWarden"
 
 
 def _load_changelog() -> str:
@@ -41,7 +42,7 @@ class AboutWindow(ctk.CTkToplevel):
         """Build the about window and load the bundled changelog."""
         super().__init__(master)
         apply_icon(self)
-        self.title("About InvoiceM8")
+        self.title("About InvoiceWarden")
         self.geometry("560x620")
         self.configure(fg_color=C["bg"])
         self.attributes("-topmost", True)
@@ -49,18 +50,23 @@ class AboutWindow(ctk.CTkToplevel):
 
         head = ctk.CTkFrame(self, fg_color=C["panel"])
         head.pack(fill="x")
-        ctk.CTkLabel(head, text="INVOICEM8", font=FONT_WORDMARK,
+        ctk.CTkLabel(head, text="INVOICEWARDEN", font=FONT_WORDMARK,
                      text_color=C["text"]).pack(anchor="w", padx=16, pady=(12, 0))
         ctk.CTkLabel(head, text=f"v{APP_VERSION}"
                      + ("" if updater.is_frozen() else "   (running from source)"),
                      font=FONT_TAGLINE, text_color=C["dim"]).pack(anchor="w", padx=16)
-        ctk.CTkLabel(head, text="Outlook invoices -> ServiceM8 / accounting   .   by Mikey",
-                     font=FONT_UI, text_color=C["dim"]).pack(anchor="w", padx=16, pady=(0, 12))
+        ctk.CTkLabel(head, text="Outlook invoices -> ServiceM8 / accounting",
+                     font=FONT_UI, text_color=C["dim"]).pack(anchor="w", padx=16)
+        ctk.CTkLabel(head, text="Sixth Day Studios  .  ABN 88 366 474 304  .  "
+                     "hello@sixthdaystudios.com",
+                     font=FONT_TAGLINE, text_color=C["dim"]).pack(anchor="w", padx=16, pady=(0, 12))
 
         bar = ctk.CTkFrame(self, fg_color=C["bg"])
         bar.pack(fill="x", padx=16, pady=10)
-        accent_button(ctk, bar, "View on GitHub",
-                      lambda: webbrowser.open(REPO_URL), colour=C["btn_off"]).pack(side="left")
+        accent_button(ctk, bar, "sixthdaystudios.com",
+                      lambda: webbrowser.open(SITE_URL), colour=C["btn_off"]).pack(side="left")
+        accent_button(ctk, bar, "GitHub",
+                      lambda: webbrowser.open(REPO_URL), colour=C["btn_off"]).pack(side="left", padx=(8, 0))
         accent_button(ctk, bar, "Check for updates",
                       lambda: master.check_updates_now(lambda t: self._msg.configure(text=t)),
                       colour=C["blue"]).pack(side="left", padx=8)

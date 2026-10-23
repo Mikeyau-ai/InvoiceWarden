@@ -1,36 +1,38 @@
-"""Visual theme for InvoiceM8 - mirrors the RamBo desktop app palette.
+"""Visual theme for the app - the Sixth Day Studios dark palette.
 
-RamBo uses a hand-rolled near-black dark theme with Segoe UI / Consolas and
-flat accent buttons. We reproduce the same colours and type here on top of
-CustomTkinter so the two apps feel like one product family.
+Colours are taken from sixthdaystudios.com (near-black ground, slate surfaces,
+teal accent) with Segoe UI / Consolas type, applied on top of CustomTkinter.
 """
 from __future__ import annotations
 
 import ctypes
 
-# --- RamBo colour palette (verbatim) --------------------------------------
+# --- Sixth Day Studios palette (dark theme from sixthdaystudios.com) --------
 C = {
-    "bg":       "#121212",
-    "panel":    "#1a1a1a",
-    "row":      "#1f1f1f",
-    "row_alt":  "#272727",
-    "border":   "#2e2e2e",
-    "hairline": "#262626",
-    "text":     "#dcdcdc",
-    "dim":      "#6b6b6b",
-    "dimmer":   "#4a4a4a",
-    "green":    "#4caf50",
-    "red":      "#e05252",
-    "yellow":   "#e0a040",
-    "orange":   "#e07840",
-    "blue":     "#5296e0",
-    "purple":   "#b06ed8",
-    "select":   "#1e4468",
-    "warn":     "#c0392b",
-    "chip_on":  "#2a2a2a",
-    "chip_off": "#1a1a1a",
-    "btn_off":  "#242424",
+    "bg":       "#0f1115",
+    "panel":    "#171a20",
+    "row":      "#171a20",
+    "row_alt":  "#1f232b",
+    "border":   "#2a2f38",
+    "hairline": "#2a2f38",
+    "text":     "#e8ebef",
+    "dim":      "#98a2ad",
+    "dimmer":   "#5d6671",
+    "green":    "#3ccf7f",
+    "red":      "#ff6b6b",
+    "yellow":   "#f0a93a",
+    "orange":   "#f0a93a",
+    "blue":     "#2cc4a8",   # the studio accent (teal) - primary buttons/headings
+    "purple":   "#8b5cf6",
+    "select":   "#14453d",
+    "warn":     "#d64545",
+    "chip_on":  "#1f232b",
+    "chip_off": "#171a20",
+    "btn_off":  "#1f232b",
 }
+
+#: Dark ink used on top of the bright teal accent (white is unreadable on it).
+ACCENT_INK = "#06231d"
 
 # --- Fonts (RamBo spec) -------------------------------------------------
 FONT_UI = ("Segoe UI", 13)
@@ -79,13 +81,13 @@ def apply(ctk) -> None:
         fg_color=[C["btn_off"], C["btn_off"]],
         hover_color=[shade(C["btn_off"], 1.4), shade(C["btn_off"], 1.4)],
         text_color=[C["text"], C["text"]],
-        border_width=0, corner_radius=4,
+        border_width=0, corner_radius=8,
     )
     ctk.ThemeManager.theme["CTkEntry"].update(
         fg_color=[C["row"], C["row"]],
         border_color=[C["border"], C["border"]],
         text_color=[C["text"], C["text"]],
-        border_width=1, corner_radius=3,
+        border_width=1, corner_radius=8,
     )
     for widget in ("CTkComboBox", "CTkOptionMenu"):
         ctk.ThemeManager.theme[widget].update(
@@ -130,19 +132,20 @@ def apply(ctk) -> None:
 
 
 def accent_button(ctk, parent, text, command, colour=None, **kw):
-    """Flat, semibold accent button in the RamBo style (white text on colour)."""
+    """Flat, semibold accent button: dark ink on the teal accent, light text elsewhere."""
     colour = colour or C["blue"]
-    kw.setdefault("height", 30)
-    kw.setdefault("corner_radius", 4)
+    kw.setdefault("height", 32)
+    kw.setdefault("corner_radius", 8)
     return ctk.CTkButton(
         parent, text=text, command=command,
         fg_color=colour, hover_color=shade(colour, 0.82),
-        text_color="#ffffff", font=FONT_BTN, **kw
+        text_color=ACCENT_INK if colour == C["blue"] else C["text"],
+        font=FONT_BTN, **kw
     )
 
 
 def apply_icon(window) -> None:
-    """Give a window the InvoiceM8 icon (taskbar + title bar).
+    """Give a window the InvoiceWarden icon (taskbar + title bar).
 
     Same .ico PyInstaller stamps into the executable, so the taskbar icon and
     the file icon always match. Silently ignored if the asset is missing or the

@@ -173,7 +173,7 @@ class SettingsTab:
         self._unread_only.pack(anchor="w", padx=6, pady=4)
         self._autostart = ctk.CTkSwitch(self.frame, text="Start watcher automatically on app launch")
         self._autostart.pack(anchor="w", padx=6, pady=4)
-        self._run_startup = ctk.CTkSwitch(self.frame, text="Run InvoiceM8 on Windows startup")
+        self._run_startup = ctk.CTkSwitch(self.frame, text="Run InvoiceWarden on Windows startup")
         self._run_startup.pack(anchor="w", padx=6, pady=4)
 
     def _build_updates(self) -> None:
@@ -526,7 +526,7 @@ class SettingsTab:
                                                               text_color=colour))
 
         threading.Thread(target=worker, daemon=True,
-                         name="InvoiceM8-SettingsTest").start()
+                         name="InvoiceWarden-SettingsTest").start()
 
     def _test_service(self) -> None:
         """Check the selected Service system's credentials against its API."""

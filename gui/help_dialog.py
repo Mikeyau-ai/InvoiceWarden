@@ -59,7 +59,7 @@ class GuideWindow(ctk.CTkToplevel):
         """Render one scrollable card per guide section."""
         super().__init__(master)
         apply_icon(self)
-        self.title("InvoiceM8 - Setup guide")
+        self.title("InvoiceWarden - Setup guide")
         self.geometry("640x680")
         self.configure(fg_color=C["bg"])
         self.attributes("-topmost", True)

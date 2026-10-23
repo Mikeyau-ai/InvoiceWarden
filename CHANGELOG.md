@@ -3,6 +3,21 @@
 All notable changes to InvoiceM8. Newest first. Bump `version.py` and add an
 entry here for every release.
 
+## 1.0.41
+- **Renamed to InvoiceWarden.** New name, window title, About box and download.
+  Your suppliers, settings, history, saved passwords and "Run on startup"
+  carry over automatically on first launch (the old InvoiceM8 folder is left
+  in place; delete it once you're happy).
+- **New look: Sixth Day Studios colours.** Near-black ground, slate panels and
+  the studio teal accent, with rounder buttons. The About box now shows
+  Sixth Day Studios' details and website link.
+- **Catch up shows it is working.** The button disables and shows a spinning
+  "Catching up" indicator until the sweep finishes.
+- **Simpler Activity Log times.** Rows show a plain local time such as
+  "Sep 15  01:22 PM"; tick **Advanced** for the full technical timestamp.
+- **Warnings are quieter.** Warning lines are dim grey, and new-supplier
+  messages are no longer warnings. The Error Log has a **Clear all** button.
+
 ## 1.0.40
 - **Fixed: "Test AI" always failed with `'sender'`.** The button never
   actually reached the AI provider - it crashed building the test prompt
