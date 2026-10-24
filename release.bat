@@ -9,14 +9,16 @@ echo     #   ##  # #   # #   #   #   #    #    ## ## #   #
 echo     #   # # # #   # #   #   #   #    ###  # # #  ###
 echo     #   #  ## #   # #   #   #   #    #    #   # #   #
 echo   ##### #   #   #    ###  ##### #### ##### #   #  ###
-echo   build ^& release   github.com/Mikeyau-ai/InvoiceWarden
+echo   build ^& release   sixthdaystudios.com
 echo.
 
 :: release.py is the whole pipeline: it runs the tests, then asks
 ::   1. build a fresh InvoiceWarden.exe?
-::   2. publish it as GitHub release v<APP_VERSION>?
+::   2. publish dist\InvoiceWarden-<APP_VERSION>.exe to the update store?
 :: Answer the prompts. Scripting overrides: --yes (yes to both),
-:: --build-only (build, never publish), --skip-build (publish dist\ as-is).
+:: --build-only (build, never publish), --skip-build (publish dist\ as-is),
+:: --dry-run (sign + print, upload nothing).
+:: --github-transition is for ONE final release only (see release.py).
 python release.py %*
 set RC=%errorlevel%
 pause

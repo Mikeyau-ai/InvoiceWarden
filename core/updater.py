@@ -1,17 +1,27 @@
 """Self-update for frozen InvoiceWarden builds.
 
-Mirrors the updater pattern used by the other apps (RamBo / Ashen Fall):
-check GitHub Releases for a newer ``InvoiceWarden.exe``, download it, and swap it
-in via a detached helper script (a running exe cannot overwrite itself).
+Checks the Sixth Day Studios update store (sixthdaystudios.com) for a newer
+InvoiceWarden, downloads it, and swaps it in via a detached helper script (a
+running exe cannot overwrite itself).
+
+The website serves ``latest``: {"body": "<json text>", "sig": "<base64url
+Ed25519 signature of body>"}. The body is {app, version, published, notes[],
+file, size, sha256}. It is signed on the publisher's PC by
+tools/release_upload.py with a key that never leaves it and is checked here
+against PUBLIC_KEY, so a tampered website or bucket cannot push a bad update.
+The downloaded file's size and SHA-256 must also match the signed body before
+the swap helper is ever started.
 
 * Stdlib only (urllib / json / threading) - adds nothing to requirements and
   can run before the GUI is up.
 * Inactive when running from source (``sys.frozen`` is False): a dev tree may
   legitimately be ahead of the published release.
-* Never raises for network problems - a failed check is a silent no-op.
+* Never raises for network problems - a failed background check is a silent no-op.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import re
@@ -19,15 +29,19 @@ import subprocess
 import sys
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-# Public repo whose Releases host the build. Overridable for testing.
-GITHUB_REPO = os.getenv("INVOICEWARDEN_UPDATE_REPO", "Mikeyau-ai/InvoiceWarden")
-_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-_ASSET_NAME = "InvoiceWarden.exe"
-_ASSET_NAMES = (_ASSET_NAME.lower(), "invoicem8.exe")   # legacy name kept for old releases
+from core import ed25519
+
+APP = "invoicewarden"
+LATEST_URL = "https://sixthdaystudios.com/api/updates/invoicewarden/latest"
+DOWNLOAD_URL = "https://sixthdaystudios.com/api/updates/invoicewarden/"
+# The public half of the Sixth Day Studios update key (the private half stays
+# on the publisher's PC, never in this repo).
+PUBLIC_KEY = base64.urlsafe_b64decode("coayBI-TlGPo3dSHnUc-j67dGqPUM1TmX5Z8pTqi3CQ=")
 _UA = "InvoiceWarden-Updater"
 _CHECK_TIMEOUT = 8
 
@@ -98,7 +112,7 @@ def auto_check_pref() -> bool:
 
 
 class UpdateCheckError(Exception):
-    """The update check could not complete - offline, GitHub error, rate limit.
+    """The update check could not complete - offline, server error, bad signature.
 
     Distinct from "checked fine, already current" so the manual check can tell
     the user their check *failed* instead of silently implying they are current.
@@ -108,12 +122,18 @@ class UpdateCheckError(Exception):
 # -- update info ----------------------------------------------------
 @dataclass
 class UpdateInfo:
-    """A newer release found on GitHub."""
+    """A newer release found in the update store.
+
+    ``notes`` is the manifest's note list rendered as "- bullet" lines, the
+    same bullet-text shape the update dialog has always shown. ``sha256`` is
+    the signed fingerprint; :func:`download` refuses to run without one.
+    """
 
     version: str
     url: str
     size: int
     notes: str
+    sha256: str = ""
 
     @property
     def size_mb(self) -> float:
@@ -143,57 +163,89 @@ class UpdateInfo:
         return out[:15]
 
 
-def _http_error_reason(exc: urllib.error.HTTPError) -> str:
-    """Short human explanation for an HTTPError from the Releases API."""
-    if exc.code == 403 and exc.headers.get("X-RateLimit-Remaining") == "0":
-        return ("GitHub is rate-limiting update checks from your network - "
-                "wait an hour, or download the update manually")
-    if exc.code == 404:
-        return "no published release was found on GitHub"
-    return f"GitHub returned an error (HTTP {exc.code})"
+def read_manifest(raw, public_key: bytes = PUBLIC_KEY) -> dict:
+    """The release described by a signed ``latest`` response.
+
+    Raises ValueError unless the body is genuinely signed by ``public_key`` and
+    describes an InvoiceWarden release with a safe file name, int size and
+    64-hex SHA-256.
+    """
+    try:
+        outer = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+        body, sig = outer["body"], base64.urlsafe_b64decode(outer["sig"])
+        if not isinstance(body, str):
+            raise TypeError("body is not text")
+    except (ValueError, KeyError, TypeError) as e:
+        raise ValueError(f"the update information is malformed ({e})") from None
+    # The signature is checked over the exact body text BEFORE it is parsed.
+    if not ed25519.verify(public_key, body.encode("utf-8"), sig):
+        raise ValueError("the update information is not signed by Sixth Day Studios")
+    try:
+        info = json.loads(body)
+    except ValueError:
+        raise ValueError("the update information is malformed (body is not JSON)") from None
+    if not isinstance(info, dict) or info.get("app") != APP:
+        raise ValueError("the update information is for another app")
+    name = info.get("file")
+    if (not isinstance(name, str) or not name.endswith(".exe") or "/" in name
+            or "\\" in name or name.startswith(".")):
+        raise ValueError("the update names an odd file")
+    size, digest = info.get("size"), info.get("sha256")
+    if (not isinstance(size, int) or isinstance(size, bool) or size <= 0
+            or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", digest)):
+        raise ValueError("the update is missing its size or fingerprint")
+    version = info.get("version")
+    # The version becomes part of a local file name, so keep it to digits and dots.
+    if not isinstance(version, str) or not re.fullmatch(r"\d+(\.\d+)*", version):
+        raise ValueError("the update has an odd version number")
+    if not isinstance(info.get("notes"), list):
+        info["notes"] = []
+    return info
 
 
-def _fetch_latest(*, strict: bool = False) -> UpdateInfo | None:
-    """Query the Releases API. Returns None for every failure mode.
+def _info_from_manifest(manifest: dict) -> UpdateInfo:
+    """Turn a verified manifest into the UpdateInfo the GUI consumes."""
+    notes = "\n".join(f"- {n}" for n in manifest["notes"] if isinstance(n, str) and n.strip())
+    return UpdateInfo(
+        version=manifest["version"],
+        url=DOWNLOAD_URL + urllib.parse.quote(manifest["file"]),
+        size=manifest["size"],
+        notes=notes,
+        sha256=manifest["sha256"].lower(),
+    )
+
+
+def _fetch_latest(*, strict: bool = False, public_key: bytes = PUBLIC_KEY) -> UpdateInfo | None:
+    """Fetch and verify the signed manifest. Returns None for every failure mode.
 
     With ``strict=True`` a failure instead raises :class:`UpdateCheckError`
     carrying a readable reason - used by the manual "Check now" button so a
     network problem is not reported to the user as "you're up to date".
+    A manifest that fails verification is NEVER returned, in either mode.
     """
-    req = urllib.request.Request(
-        _API_LATEST,
-        headers={"User-Agent": _UA, "Accept": "application/vnd.github+json"},
-    )
+    req = urllib.request.Request(LATEST_URL, headers={"User-Agent": _UA})
     try:
         with urllib.request.urlopen(req, timeout=_CHECK_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         if strict:
-            raise UpdateCheckError(_http_error_reason(exc)) from exc
+            if exc.code == 404:
+                raise UpdateCheckError("no published release was found") from exc
+            raise UpdateCheckError(
+                f"the update server returned an error (HTTP {exc.code})") from exc
         return None
     except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
         if strict:
             raise UpdateCheckError(
-                "couldn't reach GitHub - check your internet connection") from exc
+                "couldn't reach sixthdaystudios.com - check your internet connection") from exc
         return None
 
-    tag = (data.get("tag_name") or "").lstrip("vV")
-    if not tag:
+    try:
+        return _info_from_manifest(read_manifest(raw, public_key))
+    except ValueError as exc:
         if strict:
-            raise UpdateCheckError("GitHub reported no published release")
+            raise UpdateCheckError(str(exc)) from exc
         return None
-    for asset in data.get("assets") or []:
-        if (asset.get("name") or "").lower() in _ASSET_NAMES:
-            return UpdateInfo(
-                version=tag,
-                url=asset.get("browser_download_url") or "",
-                size=int(asset.get("size") or 0),
-                notes=(data.get("body") or "").strip(),
-            )
-    if strict:
-        raise UpdateCheckError(
-            f"the latest release (v{tag}) has no {_ASSET_NAME} attached yet")
-    return None
 
 
 def _is_newer(info: UpdateInfo) -> bool:
@@ -254,13 +306,22 @@ def download(info: UpdateInfo, progress_cb=None, cancel=None) -> Path | None:
     """Download the new exe to the updates dir. Returns its path or None.
 
     ``progress_cb(done, total)`` is called as chunks arrive; ``cancel()`` is
-    polled per chunk. Never leaves a partial file behind.
+    polled per chunk. The file's size and SHA-256 are checked against the
+    signed manifest values before it is renamed into place; on any mismatch (or
+    a missing fingerprint) it is deleted and None is returned. Never leaves a
+    partial file behind.
     """
+    # Fail closed: without the signed fingerprint nothing may be installed.
+    if not info.sha256 or info.size <= 0:
+        return None
     _UPDATE_DIR.mkdir(parents=True, exist_ok=True)
+    # Local name is fixed by version; the swap always targets the running exe.
     dest = _UPDATE_DIR / f"InvoiceWarden-{info.version}.exe"
     part = dest.with_suffix(".exe.part")
 
-    for old in _UPDATE_DIR.glob("InvoiceWarden-*.exe"):
+    # Also sweeps .part leftovers from an interrupted earlier download.
+    for old in [*_UPDATE_DIR.glob("InvoiceWarden-*.exe"),
+                *_UPDATE_DIR.glob("InvoiceWarden-*.exe.part")]:
         if old != dest:
             try:
                 old.unlink()
@@ -268,10 +329,11 @@ def download(info: UpdateInfo, progress_cb=None, cancel=None) -> Path | None:
                 pass
 
     req = urllib.request.Request(info.url, headers={"User-Agent": _UA})
+    digest = hashlib.sha256()
+    got = 0
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             total = int(resp.headers.get("Content-Length") or info.size or 0)
-            got = 0
             with open(part, "wb") as fh:
                 while True:
                     if cancel is not None and cancel():
@@ -279,11 +341,19 @@ def download(info: UpdateInfo, progress_cb=None, cancel=None) -> Path | None:
                     chunk = resp.read(256 * 1024)
                     if not chunk:
                         break
-                    fh.write(chunk)
                     got += len(chunk)
+                    if got > info.size:          # more than the signed size: abort
+                        raise ValueError("download larger than announced")
+                    digest.update(chunk)
+                    fh.write(chunk)
                     if progress_cb:
                         progress_cb(got, total)
     except Exception:
+        part.unlink(missing_ok=True)
+        return None
+
+    # Size and fingerprint must match the signed manifest before anything is installed.
+    if got != info.size or digest.hexdigest().lower() != info.sha256.lower():
         part.unlink(missing_ok=True)
         return None
 
@@ -323,7 +393,7 @@ echo      #   #  ## #   # #   #   #   #    #    #   # #   #
 echo    ##### #   #   #    ###  ##### #### ##### #   #  ###
 echo.
 echo   ============================================================
-echo    InvoiceWarden auto-updater    github.com/Mikeyau-ai/InvoiceWarden
+echo    InvoiceWarden auto-updater    sixthdaystudios.com
 echo   ============================================================
 echo.
 echo    This window is part of InvoiceWarden's built-in updater - it is

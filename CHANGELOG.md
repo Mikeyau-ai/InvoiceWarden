@@ -3,6 +3,12 @@
 All notable changes to InvoiceM8. Newest first. Bump `version.py` and add an
 entry here for every release.
 
+## 1.0.42
+- **Updates now come from sixthdaystudios.com.** Each update is signed by
+  Sixth Day Studios and checked (signature, size and fingerprint) before it is
+  installed. Your settings and the "Check for updates now" button work as
+  before.
+
 ## 1.0.41
 - **Renamed to InvoiceWarden.** New name, window title, About box and download.
   Your suppliers, settings, history, saved passwords and "Run on startup"

@@ -218,7 +218,7 @@ class App(ctk.CTk):
                 """Tk thread: report the outcome."""
                 if error is not None:
                     on_result(f"Update check failed: {error}. You can still get "
-                              f"the latest version from the GitHub Releases page.")
+                              f"the latest version from sixthdaystudios.com.")
                 elif info is None:
                     on_result(f"You're up to date (v{APP_VERSION})."
                               if updater.is_frozen()

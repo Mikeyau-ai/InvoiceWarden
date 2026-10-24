@@ -1,4 +1,4 @@
-"""Build dist/InvoiceWarden.exe and, if you say yes, publish it as a GitHub release.
+"""Build dist/InvoiceWarden-<version>.exe and, if you say yes, publish it to the update store.
 
 One script, driven by two questions. ``release.bat`` is a thin wrapper:
 
@@ -6,16 +6,19 @@ One script, driven by two questions. ``release.bat`` is a thin wrapper:
 
 Non-interactive overrides (for scripting):
 
-    --yes           answer yes to both questions
-    --build-only    build, never publish (the old build.bat)
-    --skip-build    don't rebuild; publish the exe already in dist/
+    --yes               answer yes to every question
+    --build-only        build, never publish (the old build.bat)
+    --skip-build        don't rebuild; publish the exe already in dist/
+    --dry-run           sign and print the update but upload nothing
+    --github-transition ONE-TIME extra step: also publish a GitHub release (see below)
 
-The permanent download URL - also what installed builds poll for updates - is:
+Publishing hands the versioned exe to tools/release_upload.py, which signs the
+update manifest and uploads both to the Sixth Day Studios update store. The
+permanent download link is:
 
-    https://github.com/<owner>/<repo>/releases/latest/download/InvoiceWarden.exe
+    https://sixthdaystudios.com/api/updates/invoicewarden/download
 
-Bump version.py, run release.bat, answer the prompts. Publishing needs the
-GitHub CLI:  winget install GitHub.cli  &&  gh auth login
+Bump version.py, add a CHANGELOG.md entry, run release.bat, answer the prompts.
 """
 from __future__ import annotations
 
@@ -25,15 +28,23 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from core.updater import GITHUB_REPO
 from version import APP_VERSION
 
-EXE = Path("dist/InvoiceWarden.exe")
-#: Installs up to v1.0.40 look for an asset called InvoiceM8.exe; attach a copy.
-LEGACY_EXE = Path("dist/InvoiceM8.exe")
+EXE = Path("dist/InvoiceWarden.exe")                      # what PyInstaller produces
+VERSIONED_EXE = Path(f"dist/InvoiceWarden-{APP_VERSION}.exe")  # what the update store serves
 SPEC = "InvoiceWarden.spec"
+#: Secrets file holding SDS_UPDATE_SIGNING_KEY and CLOUDFLARE_API_TOKEN.
+ENV_FILE = r"Y:\Guardian\.env"
+UPLOAD_TOOL = Path("tools/release_upload.py")
+
+# --- one-time GitHub transition (delete everything marked TRANSITION after use) ---
+#: TRANSITION: repo whose latest release already-installed copies (<= 1.0.41) poll.
+GITHUB_REPO = "Mikeyau-ai/InvoiceWarden"
+#: TRANSITION: installs up to v1.0.40 look for an asset called InvoiceM8.exe; attach a copy.
+LEGACY_EXE = Path("dist/InvoiceM8.exe")
 
 
+# TRANSITION: used only by publish_github_transition().
 def gh(*args: str) -> subprocess.CompletedProcess:
     """Run a gh subcommand, capturing output."""
     return subprocess.run(["gh", *args], capture_output=True, text=True)
@@ -59,9 +70,26 @@ def build() -> bool:
                        "--clean", SPEC]).returncode != 0:
         print("  BUILD FAILED.")
         return False
-    shutil.copyfile(EXE, LEGACY_EXE)
-    print(f"  Built {EXE} (+ legacy-named copy for old installs)")
+    print(f"  Built {EXE}")
     return True
+
+
+def make_versioned() -> None:
+    """Copy dist/InvoiceWarden.exe to dist/InvoiceWarden-<version>.exe (the file the store serves).
+
+    The installed exe keeps its own name; only the published file is versioned.
+    """
+    shutil.copyfile(EXE, VERSIONED_EXE)
+    print(f"  Named {VERSIONED_EXE} for the update store")
+
+
+def publish_store(dry_run: bool) -> bool:
+    """Sign and upload the versioned exe via tools/release_upload.py. True on success."""
+    cmd = [sys.executable, str(UPLOAD_TOOL), "--installer", str(VERSIONED_EXE),
+           "--env-file", ENV_FILE]
+    if dry_run:
+        cmd.append("--dry-run")
+    return subprocess.run(cmd).returncode == 0
 
 
 def changelog(version: str) -> str:
@@ -112,24 +140,85 @@ def _ask(question: str, *, default: bool) -> bool:
     return default if not reply else reply in ("y", "yes")
 
 
+def publish_github_transition(exe_desc: str, assume_yes: bool) -> bool:
+    """TRANSITION ONLY: publish the old-style GitHub release so installed copies learn the new source.
+
+    Copies of InvoiceWarden up to 1.0.41 poll GitHub Releases for InvoiceWarden.exe
+    (or, for <= 1.0.40, InvoiceM8.exe). This ONE release carries a build whose
+    updater already points at sixthdaystudios.com, so after it they never
+    look at GitHub again. Delete this function, gh(), LEGACY_EXE, GITHUB_REPO
+    and the --github-transition flag once every install has moved over.
+    """
+    if gh("--version").returncode != 0:
+        print("  GitHub CLI not found:  winget install GitHub.cli")
+        return False
+    if gh("auth", "status").returncode != 0:
+        print("  Not logged in:  gh auth login")
+        return False
+
+    slug = gh("repo", "view", "--json", "nameWithOwner",
+              "-q", ".nameWithOwner").stdout.strip()
+    if slug.lower() != GITHUB_REPO.lower():
+        print(f"  Remote is {slug} but the transition expects {GITHUB_REPO}.")
+        return False
+
+    tag = f"v{APP_VERSION}"
+    exists = gh("release", "view", tag).returncode == 0
+    print(f"\n  TRANSITION: {'Update' if exists else 'Publish'} GitHub release {tag} on {slug}"
+          f"  (marked 'Latest' - installed copies update to it ONE LAST TIME)")
+    print(f"    asset : {EXE}  ({exe_desc}) + legacy-named copy")
+    if not assume_yes and not _ask("  Publish to GitHub now?", default=False):
+        print("\n  GitHub release not published.\n")
+        return True
+
+    # The assets keep their old names: that is what the old updaters look for.
+    shutil.copyfile(EXE, LEGACY_EXE)
+    notes = (
+        f"## What's new\n\n{changelog(APP_VERSION)}\n\n"
+        "---\n\n"
+        "Download `InvoiceWarden.exe` and run it - no install, no admin. It is "
+        "unsigned, so Windows SmartScreen shows \"Windows protected your PC\": "
+        "click **More info** then **Run anyway**. From this version on, updates "
+        "come from sixthdaystudios.com."
+    )
+    if exists:
+        print(f"  Release {tag} exists - updating asset + notes")
+        r1 = gh("release", "upload", tag, str(EXE), str(LEGACY_EXE), "--clobber")
+        r2 = gh("release", "edit", tag, "--notes", notes)
+        ok = r1.returncode == 0 and r2.returncode == 0
+        if not ok:
+            print("  " + (r1.stderr.strip() or r2.stderr.strip()))
+    else:
+        r = gh("release", "create", tag, str(EXE), str(LEGACY_EXE),
+               "--title", f"InvoiceWarden {tag}", "--notes", notes)
+        ok = r.returncode == 0
+        print("  " + (f"Created release {tag}" if ok else r.stderr.strip()))
+    return ok
+
+
 def main() -> int:
     """Test, then interactively build and/or publish. Returns a shell exit code.
 
     Run with no arguments and answer two prompts: build a fresh exe?, then
-    publish it as GitHub release ``v<APP_VERSION>``? Overrides for scripting:
-    ``--yes`` (yes to both), ``--build-only`` (build, never publish),
-    ``--skip-build`` (publish the exe already in ``dist/``).
+    publish it to the update store? Overrides for scripting: ``--yes`` (yes to
+    all), ``--build-only`` (build, never publish), ``--skip-build`` (publish
+    the exe already in ``dist/``), ``--dry-run`` (sign and print, upload
+    nothing) and, for the one-time move off GitHub, ``--github-transition``.
     """
     args = set(sys.argv[1:])
-    unknown = args - {"--build-only", "--skip-build", "--yes"}
+    known = {"--build-only", "--skip-build", "--yes", "--dry-run", "--github-transition"}
+    unknown = args - known
     if unknown:
         # Fail loudly rather than let a typo'd flag fall through to a publish.
         print(f"  Unknown option(s): {' '.join(sorted(unknown))}")
-        print("  Usage: release.py [--build-only | --skip-build] [--yes]")
+        print("  Usage: release.py [--build-only | --skip-build] [--yes] "
+              "[--dry-run] [--github-transition]")
         return 2
     build_only = "--build-only" in args
     skip_build = "--skip-build" in args
     assume_yes = "--yes" in args
+    dry_run = "--dry-run" in args
+    github_transition = "--github-transition" in args
 
     if not run_tests():
         print("  TESTS FAILED - stopping.")
@@ -154,65 +243,30 @@ def main() -> int:
     if not do_build:
         print(f"  Using the existing {EXE}  ({exe_desc})")
 
-    # --- question 2: publish it as a GitHub release? ---------------
+    # The published file carries the version in its name.
+    make_versioned()
     if build_only:
         print(f"\n  Done. {EXE} is ready to run.\n"
               f"  (settings + database live in %LOCALAPPDATA%\\InvoiceWarden)\n")
         return 0
 
-    if gh("--version").returncode != 0:
-        print("  GitHub CLI not found:  winget install GitHub.cli")
-        return 1
-    if gh("auth", "status").returncode != 0:
-        print("  Not logged in:  gh auth login")
-        return 1
-
-    slug = gh("repo", "view", "--json", "nameWithOwner",
-              "-q", ".nameWithOwner").stdout.strip()
-    if slug.lower() != GITHUB_REPO.lower():
-        print(f"  Remote is {slug} but core/updater.py checks {GITHUB_REPO}.\n"
-              f"  Fix GITHUB_REPO before releasing or clients go stale.")
-        return 1
-
-    tag = f"v{APP_VERSION}"
-    exists = gh("release", "view", tag).returncode == 0
-
-    # Publishing is outward-facing and marks this build "Latest" - every
-    # installed client updates to it. Show what will ship, then confirm.
-    print(f"\n  {'Update' if exists else 'Publish'} GitHub release {tag} on {slug}"
-          f"  (marked 'Latest' - every install auto-updates to it)")
-    print(f"    asset : {EXE}  ({exe_desc})")
+    # --- question 2: publish it to the update store? ----------------
+    # Publishing is outward-facing: every installed client updates to it.
+    print(f"\n  Publish {VERSIONED_EXE.name} to the Sixth Day Studios update store"
+          f"  (every install auto-updates to it)")
+    print(f"    file  : {VERSIONED_EXE}  ({exe_desc})")
     print(f"    notes : {changelog(APP_VERSION).splitlines()[0][:72]}")
     if not assume_yes and not _ask("  Publish now?", default=False):
-        print(f"\n  Not published. The build is in {EXE} if you want it.\n")
+        print(f"\n  Not published. The build is in {VERSIONED_EXE} if you want it.\n")
         return 0
+    if not publish_store(dry_run):
+        print("  Publishing to the update store FAILED.")
+        return 1
 
-    notes = (
-        f"## What's new\n\n{changelog(APP_VERSION)}\n\n"
-        "---\n\n"
-        "Download `InvoiceWarden.exe` and run it - no install, no admin. It is "
-        "unsigned, so Windows SmartScreen shows \"Windows protected your PC\": "
-        "click **More info** then **Run anyway**. Existing installs update "
-        "themselves from this release."
-    )
-
-    if exists:
-        print(f"  Release {tag} exists - updating asset + notes")
-        r1 = gh("release", "upload", tag, str(EXE), str(LEGACY_EXE), "--clobber")
-        r2 = gh("release", "edit", tag, "--notes", notes)
-        ok = r1.returncode == 0 and r2.returncode == 0
-        if not ok:
-            print("  " + (r1.stderr.strip() or r2.stderr.strip()))
-    else:
-        r = gh("release", "create", tag, str(EXE), str(LEGACY_EXE),
-               "--title", f"InvoiceWarden {tag}", "--notes", notes)
-        ok = r.returncode == 0
-        print("  " + (f"Created release {tag}" if ok else r.stderr.strip()))
-
-    if ok:
-        print(f"\n  Permanent link:\n"
-              f"  https://github.com/{slug}/releases/latest/download/InvoiceWarden.exe\n")
-    return 0 if ok else 1
+    # TRANSITION: the GitHub release comes last, only when asked for, and never on a dry run.
+    if github_transition and not dry_run:
+        return 0 if publish_github_transition(exe_desc, assume_yes) else 1
+    return 0
 
 
 if __name__ == "__main__":

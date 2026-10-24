@@ -16,8 +16,7 @@ from gui.theme import C, FONT_DATA, FONT_TAGLINE, FONT_UI, FONT_WORDMARK, accent
 from gui.theme import apply_icon
 from version import APP_VERSION
 
-SITE_URL = "https://sixthdaystudios.com/"
-REPO_URL = "https://github.com/Mikeyau-ai/InvoiceWarden"
+SITE_URL = "https://sixthdaystudios.com/invoicewarden"
 
 
 def _load_changelog() -> str:
@@ -65,8 +64,6 @@ class AboutWindow(ctk.CTkToplevel):
         bar.pack(fill="x", padx=16, pady=10)
         accent_button(ctk, bar, "sixthdaystudios.com",
                       lambda: webbrowser.open(SITE_URL), colour=C["btn_off"]).pack(side="left")
-        accent_button(ctk, bar, "GitHub",
-                      lambda: webbrowser.open(REPO_URL), colour=C["btn_off"]).pack(side="left", padx=(8, 0))
         accent_button(ctk, bar, "Check for updates",
                       lambda: master.check_updates_now(lambda t: self._msg.configure(text=t)),
                       colour=C["blue"]).pack(side="left", padx=8)

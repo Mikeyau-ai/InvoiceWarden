@@ -529,19 +529,17 @@ class TestUpdateCheckErrors(unittest.TestCase):
             with self.assertRaises(updater.UpdateCheckError):
                 updater.check_now()
 
-    def test_rate_limit_message_is_explained(self) -> None:
-        """A 403 with no remaining quota is reported as rate-limiting."""
+    def test_server_error_message_is_explained(self) -> None:
+        """An HTTP error from the update server is reported with its status."""
         import urllib.error
 
         from core import updater
 
-        err = urllib.error.HTTPError(
-            updater._API_LATEST, 403, "rate limited",
-            {"X-RateLimit-Remaining": "0"}, None)
+        err = urllib.error.HTTPError(updater.LATEST_URL, 503, "unavailable", {}, __import__("io").BytesIO())
         with patch.object(updater.urllib.request, "urlopen", side_effect=err):
             with self.assertRaises(updater.UpdateCheckError) as caught:
                 updater.check_now()
-        self.assertIn("rate-limiting", str(caught.exception))
+        self.assertIn("503", str(caught.exception))
 
     def test_auto_check_stays_a_silent_no_op(self) -> None:
         """start_check()'s path still swallows failures (no exception, no result)."""

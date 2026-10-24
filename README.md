@@ -34,21 +34,36 @@ suite, then asks two questions -
    producing a single windowed `dist\InvoiceWarden.exe` (~100 MB, no Python needed
    on the target). Build from an environment with the full `requirements.txt`
    installed so the AI / Graph / attachment libraries get bundled - the spec
-   silently skips any that are missing.
-2. **Publish it as a GitHub release `v<version>`?** Answer no and you just have
-   a local build. Answer yes and it uploads the exe and the CHANGELOG notes.
+   silently skips any that are missing. The build is also copied to
+   `dist\InvoiceWarden-<version>.exe`, the file that gets published.
+2. **Publish it to the update store?** Answer no and you just have a local
+   build. Answer yes and `release.py` runs `toolselease_upload.py`, which
+   signs the update (Ed25519, key in `SDS_UPDATE_SIGNING_KEY` of
+   `Y:\Guardian\.env`), uploads the exe and `latest.json` to the Sixth Day
+   Studios store and reads it back to verify. Release notes are the version's
+   bullets in `CHANGELOG.md`. To publish by hand:
+   `python toolselease_upload.py --installer dist\InvoiceWarden-X.Y.Z.exe --env-file Y:\Guardian\.env [--dry-run]`.
 
 Scripting overrides: `--yes` (yes to both), `--build-only` (build, never
-publish), `--skip-build` (publish the exe already in `dist\`).
+publish), `--skip-build` (publish the exe already in `dist\`), `--dry-run`
+(sign and print, upload nothing).
+
+**One-time GitHub transition.** Copies up to 1.0.41 still poll GitHub Releases.
+The first store release (1.0.42) must therefore also be published there once,
+with `release.py --github-transition`, so those installs download a build that
+knows the new source. After that the GitHub step (`--github-transition`,
+`publish_github_transition`, `gh`, `LEGACY_EXE`, `GITHUB_REPO` in `release.py`)
+should be deleted and the repo can go private.
 
 Settings and the database live in `%LOCALAPPDATA%\InvoiceWarden`, so the exe stays
-stateless and can be replaced in place. Installed builds check `releases/latest`
-on launch (and via **Settings > Updates > Check for updates now**), download the
-new `InvoiceWarden.exe`, and swap it in via a detached helper. Auto-check can be
-turned off in Settings; running from source never prompts.
+stateless and can be replaced in place. Installed builds check the update store
+on launch (and via **Settings > Updates > Check for updates now**), verify the
+signature, download the new exe, check its size and SHA-256 against the signed
+manifest, and swap it over the running exe via a detached helper. Auto-check can
+be turned off in Settings; running from source never prompts.
 
 Permanent download link:
-`https://github.com/Mikeyau-ai/InvoiceWarden/releases/latest/download/InvoiceWarden.exe`
+`https://sixthdaystudios.com/api/updates/invoicewarden/download`
 
 ## First run
 
@@ -76,7 +91,7 @@ Permanent download link:
 | Routing   | `core/router.py`, `core/watcher.py` |
 | Providers | `integrations/accounting/*` + `registry.py` |
 | Startup   | `core/startup.py` (HKCU Run key) |
-| Updates   | `core/updater.py`, `gui/update_dialog.py`, `release.py`, `version.py` |
+| Updates   | `core/updater.py`, `core/ed25519.py`, `gui/update_dialog.py`, `release.py`, `tools/release_upload.py`, `version.py` |
 | About     | `gui/about_dialog.py` + bundled `CHANGELOG.md` |
 | GUI       | `gui/*` (CustomTkinter, RamBo theme in `gui/theme.py`) |
 
