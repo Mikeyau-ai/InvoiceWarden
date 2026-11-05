@@ -3,6 +3,11 @@
 All notable changes to InvoiceM8. Newest first. Bump `version.py` and add an
 entry here for every release.
 
+## 1.0.44
+- **Emails with several invoices now file each one.** Every attachment is read
+  and filed separately, instead of the second being skipped as a duplicate.
+- **Third-party licence notices are now included** with the app.
+
 ## 1.0.43
 - **Safer email connections.** IMAP mailboxes now check the mail server's
   security certificate, so nobody on the network can read your mail or app password.
