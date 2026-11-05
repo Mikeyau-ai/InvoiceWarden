@@ -113,6 +113,9 @@ class ParseResult:
     job_candidates: list = field(default_factory=list)
     confidence: float = 0.0
     source: str = "regex"
+    #: Why the AI call failed when the regex fallback produced this result
+    #: (blank when the AI answered, or none was configured).
+    ai_error: str = ""
 
     def as_dict(self) -> dict:
         """Plain-dict form, used for the retry payload snapshot."""
@@ -319,6 +322,21 @@ def _call_anthropic(api_key: str, model: str, prompt: str) -> str:
     })
     return "".join(b.get("text", "") for b in data.get("content", [])
                    if b.get("type") == "text")
+
+
+def _to_confidence(value) -> float:
+    """A model's confidence answer as a 0..1 float; 0.5 if it isn't a number.
+
+    Models sometimes answer "high" or "95%"; one odd field must not throw away
+    an otherwise good extraction.
+    """
+    try:
+        num = float(str(value).strip().rstrip("%"))
+    except (TypeError, ValueError):
+        return 0.5
+    if num > 1:                      # given as a percentage
+        num /= 100
+    return max(0.0, min(1.0, num))
 
 
 def _coerce_json(text: str) -> dict:
@@ -654,6 +672,7 @@ class InvoiceParser:
         filenames = "\n".join(p.name for p in attachments)
         provider, meta, model, key, base_url = _ai_config(self._settings)
 
+        ai_error = ""
         # Local / compatible servers may not need a key; everyone else does.
         if key or not meta["needs_key"]:
             prompt = _PROMPT.format(subject=subject, body=body[:6000],
@@ -673,10 +692,14 @@ class InvoiceParser:
                                         (data.get("job_candidates") or [])
                                         if str(v).strip()],
                         doc_type=_normalise_kind(data.get("doc_type")),
-                        confidence=float(data.get("confidence", 0) or 0),
+                        confidence=_to_confidence(data.get("confidence")),
                         source=provider,
                     )
+                ai_error = "the AI returned no usable JSON"
             except Exception as exc:
                 log.error("AI parse failed (%s); using regex fallback: %s", provider, exc)
+                ai_error = str(exc)[:200] or type(exc).__name__
 
-        return _regex_fallback(subject, body, attachment_text, filenames, sender)
+        result = _regex_fallback(subject, body, attachment_text, filenames, sender)
+        result.ai_error = ai_error
+        return result

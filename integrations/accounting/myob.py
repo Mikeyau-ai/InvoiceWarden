@@ -135,6 +135,12 @@ class MyobProvider(Provider):
         so a credit note is created as a negative-amount draft bill and clearly
         described. Review it in MYOB before applying.
         """
+        ref = (ctx.invoice_ref or "").strip()
+        if not ref:
+            # A blank number would match (and attach to) an unrelated bill.
+            return UploadResult(False, self.label,
+                                "No invoice number was read, so it cannot be "
+                                "matched safely in MYOB. Set the reference and retry.")
         try:
             headers = self._headers()
             base = self._cf_base()
@@ -145,7 +151,7 @@ class MyobProvider(Provider):
                 total = f"-{total}"
 
             # Locate an existing bill by number, else create a draft.
-            flt = requests.utils.quote(f"Number eq '{ctx.invoice_ref}'")
+            flt = requests.utils.quote("Number eq '" + ref.replace("'", "''") + "'")
             find = self.http.get(f"{base}/Purchase/Bill/Item?$filter={flt}",
                                 headers=headers, timeout=25)
             find.raise_for_status()

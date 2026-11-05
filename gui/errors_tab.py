@@ -5,6 +5,8 @@ the stored payload through the router) and a Dismiss button (marks resolved).
 """
 from __future__ import annotations
 
+import threading
+
 import customtkinter as ctk
 
 from tkinter import messagebox
@@ -71,18 +73,42 @@ class ErrorsTab:
                               colour=C["btn_off"], width=90).pack(side="left")
 
     def _retry(self, row) -> None:
-        """Re-run one failed upload from its stored payload."""
+        """Re-run one failed upload from its stored payload, off the Tk thread.
+
+        The upload makes network calls that can take minutes, which froze the
+        whole window when run inline. The worker only records its outcome; the
+        Tk thread picks it up by polling (``after`` is not called from threads).
+        """
+        if getattr(self, "_retrying", False):
+            return                      # one retry at a time
+        self._retrying = True
         self._db.bump_error_retry(row["id"])
-        ok = False
-        try:
-            if row["payload"]:
-                ok = self._router.retry_from_payload(row["payload"])
-        except Exception as exc:
-            self._app.emit_event(level="ERROR", action="retry", message=str(exc))
-        if ok:
-            self._db.mark_error_resolved(row["id"])
-        self.refresh()
-        self._app.refresh_logs()
+        outcome: dict = {}
+
+        def work() -> None:
+            """Worker thread: run the retry and note success or the error."""
+            try:
+                outcome["ok"] = bool(row["payload"]) and                     self._router.retry_from_payload(row["payload"])
+            except Exception as exc:
+                outcome["ok"] = False
+                outcome["error"] = str(exc)
+
+        def poll() -> None:
+            """Tk thread: finish up once the worker has reported."""
+            if "ok" not in outcome:
+                self._list.after(300, poll)
+                return
+            self._retrying = False
+            if outcome.get("error"):
+                self._app.emit_event(level="ERROR", action="retry",
+                                     message=outcome["error"])
+            if outcome["ok"]:
+                self._db.mark_error_resolved(row["id"])
+            self.refresh()
+            self._app.refresh_logs()
+
+        threading.Thread(target=work, daemon=True, name="InvoiceWarden-Retry").start()
+        self._list.after(300, poll)
 
     def _clear_all(self) -> None:
         """Dismiss every open warning/error after a confirmation."""

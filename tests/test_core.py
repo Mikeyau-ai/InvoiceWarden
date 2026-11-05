@@ -329,7 +329,7 @@ class TestRoutingGates(TempDbCase):
                                         job_number="9500", confidence=0.9,
                                         job_candidates=["9500"]),
                             self.make_pdf(), job_floor=10000)
-        self.assertEqual(result, "no_route")
+        self.assertEqual(result, "out_of_range")
         self.assertNotIn("uploaded", self.actions())
 
     def test_catch_up_floor_allows_new_jobs(self) -> None:
@@ -351,7 +351,7 @@ class TestRoutingGates(TempDbCase):
                                         job_number="", confidence=0.9,
                                         job_candidates=["7"]),
                             self.make_pdf(), job_floor=10000)
-        self.assertEqual(result, "no_route")
+        self.assertEqual(result, "out_of_range")
         self.assertNotIn("uploaded", self.actions())
 
     def test_no_floor_files_every_job(self) -> None:
@@ -384,7 +384,7 @@ class TestRoutingGates(TempDbCase):
                                         job_number="15050", confidence=0.9,
                                         job_candidates=["15050"]),
                             self.make_pdf(), job_floor=15000, job_ceiling=15010)
-        self.assertEqual(result, "no_route")
+        self.assertEqual(result, "out_of_range")
         self.assertNotIn("uploaded", self.actions())
 
     def test_catch_up_range_can_target_a_single_job(self) -> None:
@@ -400,7 +400,7 @@ class TestRoutingGates(TempDbCase):
                                          job_number="15002", confidence=0.9,
                                          job_candidates=["15002"]),
                              self.make_pdf("b.pdf"), job_floor=15001, job_ceiling=15001)
-        self.assertEqual(outside, "no_route")
+        self.assertEqual(outside, "out_of_range")
 
     def test_credit_without_job_is_linked(self) -> None:
         """A credit is filed against the job of the invoice it quotes."""

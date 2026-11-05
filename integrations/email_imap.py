@@ -20,6 +20,7 @@ import email
 import imaplib
 import logging
 import re
+import ssl
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime
@@ -86,8 +87,13 @@ class ImapBackend(OutlookBackend):
         if not self._user or not self._password:
             raise RuntimeError("IMAP username and password/app-password are required.")
         try:
-            cls = imaplib.IMAP4_SSL if self._ssl else imaplib.IMAP4
-            conn = cls(self._host, self._port)
+            if self._ssl:
+                # imaplib's default context does NOT verify the server
+                # certificate or hostname, so pass a verifying one explicitly.
+                conn = imaplib.IMAP4_SSL(self._host, self._port,
+                                         ssl_context=ssl.create_default_context())
+            else:
+                conn = imaplib.IMAP4(self._host, self._port)
         except Exception as exc:
             raise RuntimeError(
                 f"Could not reach {self._host}:{self._port} - {exc}") from exc
@@ -257,14 +263,19 @@ class ImapBackend(OutlookBackend):
 
     @staticmethod
     def _received_at(msg) -> datetime:
-        """Parse the Date header into an aware UTC datetime."""
+        """Parse the Date header into an aware UTC datetime, never in the future.
+
+        The header is written by the sender, so a forged far-future date would
+        otherwise become the watcher's resume point and hide all later mail.
+        """
+        now = datetime.now(timezone.utc)
         try:
             dt = parsedate_to_datetime(msg.get("Date"))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(timezone.utc)
+            return min(dt.astimezone(timezone.utc), now)
         except Exception:
-            return datetime.now(timezone.utc)
+            return now
 
     @staticmethod
     def _body_text(msg) -> str:

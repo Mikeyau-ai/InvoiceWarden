@@ -44,7 +44,14 @@ def _load_or_create_key() -> bytes:
                 log.warning("Could not copy the master key to the new "
                             "credential entry; using the old one.")
             return legacy.encode("utf-8")
-        key = Fernet.generate_key()
+        if _FALLBACK_KEY_FILE.exists():
+            # An earlier launch had to use the key file. Adopt that key rather
+            # than minting a second one, which would orphan every secret
+            # already encrypted with it.
+            key = _FALLBACK_KEY_FILE.read_bytes()
+            log.warning("Adopting the existing local key file into Credential Manager.")
+        else:
+            key = Fernet.generate_key()
         keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, key.decode("utf-8"))
         # Read it straight back: a backend that accepts the write but does not
         # persist would silently mint a new key on every launch, orphaning

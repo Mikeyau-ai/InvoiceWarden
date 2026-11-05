@@ -532,6 +532,16 @@ class Database:
             "SELECT file_path FROM pending_invoices WHERE status='pending_new_customer'"
         ) if row["file_path"]}
 
+    def resolve_pending_by_path(self, file_path: str) -> None:
+        """Mark queued invoices for this cached file as resolved.
+
+        Without this a successfully retried invoice stayed 'pending' forever
+        and the cache sweep never deleted its attachment.
+        """
+        self._exec("UPDATE pending_invoices SET status='resolved' "
+                   "WHERE file_path=? AND status='pending_new_customer'",
+                   (file_path,))
+
     def set_pending_status(self, pid: int, status: str) -> None:
         """Move one queued invoice to a new status."""
         self._exec("UPDATE pending_invoices SET status=? WHERE id=?", (status, pid))

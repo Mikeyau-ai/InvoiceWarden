@@ -55,14 +55,17 @@ class ServiceM8Provider(Provider):
 
     def _lookup(self, field: str, value: str) -> str | None:
         """UUID of the job whose ``field`` equals ``value``, or None."""
-        filt = requests.utils.quote(f"{field} eq '{value}'")
-        try:
-            r = self.http.get(f"{API}/job.json?%24filter={filt}",
-                              headers=self._headers(), timeout=20)
-            r.raise_for_status()
-        except requests.RequestException:
-            # An unsupported field just means "no match by this route".
+        # OData string literals escape ' by doubling it; the value comes from
+        # email text, so it must not be able to end the literal.
+        safe = value.replace("'", "''")
+        filt = requests.utils.quote(f"{field} eq '{safe}'")
+        r = self.http.get(f"{API}/job.json?%24filter={filt}",
+                          headers=self._headers(), timeout=20)
+        # 400/404 only mean "this field cannot be filtered that way". Auth,
+        # rate-limit and server errors must surface, not read as "no match".
+        if r.status_code in (400, 404):
             return None
+        r.raise_for_status()
         rows = r.json()
         return rows[0]["uuid"] if rows else None
 

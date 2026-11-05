@@ -1,8 +1,8 @@
 """Windows "Run on startup" toggle via the per-user Run registry key.
 
 Uses HKCU so it needs no administrator rights. The command launches the
-current Python executable against ``main.py`` with a ``--tray`` flag the app
-can use to start minimised with the watcher running.
+built exe (or, from source, the current Python against ``main.py``) with the
+``--autostart`` flag, which starts the app with the watcher running.
 """
 from __future__ import annotations
 
@@ -19,6 +19,9 @@ except ImportError:  # pragma: no cover - non-Windows dev
 
 def _launch_command() -> str:
     """Absolute command string that re-launches this app at login."""
+    if getattr(sys, "frozen", False):
+        # The built exe is the whole app; there is no main.py to pass.
+        return f'"{sys.executable}" --autostart'
     main_py = Path(__file__).resolve().parent.parent / "main.py"
     return f'"{sys.executable}" "{main_py}" --autostart'
 

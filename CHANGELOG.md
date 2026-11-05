@@ -3,6 +3,24 @@
 All notable changes to InvoiceM8. Newest first. Bump `version.py` and add an
 entry here for every release.
 
+## 1.0.43
+- **Safer email connections.** IMAP mailboxes now check the mail server's
+  security certificate, so nobody on the network can read your mail or app password.
+- **A forged email date can no longer stop the app picking up new mail.**
+- **Invoices are no longer lost quietly.** A failed email is retried a few times,
+  emails skipped by a Catch up range stay available for later, and "not a payable
+  document" skips now show in the Activity Log.
+- **You are told when the AI parser fails.** A warning is logged, and a new
+  supplier is no longer created from the basic text reader's guess.
+- **Safer matching in ServiceM8, Xero and MYOB.** Odd characters in an invoice
+  number can no longer break the lookup, blank numbers are refused, and a bad
+  ServiceM8 key is reported as such instead of "no job matched".
+- **Mailbox errors are now saved in the Activity Log**, and Error Log retries no
+  longer freeze the window.
+- **Only one copy of InvoiceWarden can run at a time**, preventing double uploads.
+- Smaller fixes: encryption key recovery, Outlook time zones, Windows reserved
+  file names, update-settings file safety, and README corrections.
+
 ## 1.0.42
 - **Updates now come from sixthdaystudios.com.** Each update is signed by
   Sixth Day Studios and checked (signature, size and fingerprint) before it is

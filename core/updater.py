@@ -65,7 +65,11 @@ def _save_state(key: str, value) -> None:
     data[key] = value
     try:
         USER_ROOT.mkdir(parents=True, exist_ok=True)
-        _STATE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        # Write-then-replace so a crash mid-write cannot leave a corrupt file
+        # (which would silently reset the skip/auto-check preferences).
+        tmp = _STATE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp, _STATE)
     except OSError:
         pass
 

@@ -22,6 +22,7 @@ Bump version.py, add a CHANGELOG.md entry, run release.bat, answer the prompts.
 """
 from __future__ import annotations
 
+import importlib.util
 import shutil
 import subprocess
 import sys
@@ -50,6 +51,17 @@ def gh(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["gh", *args], capture_output=True, text=True)
 
 
+#: Libraries InvoiceWarden.spec bundles only if importable. Missing ones would
+#: ship a build that silently lacks Graph sign-in or PDF/DOCX reading.
+REQUIRED_BUILD_MODULES = ("customtkinter", "msal", "pdfminer", "docx",
+                          "keyring", "cryptography", "win32com")
+
+
+def missing_build_deps() -> list[str]:
+    """Names of required libraries that are not installed in this Python."""
+    return [m for m in REQUIRED_BUILD_MODULES if importlib.util.find_spec(m) is None]
+
+
 def build() -> bool:
     """Clean previous output and build the one-file exe with PyInstaller.
 
@@ -59,6 +71,11 @@ def build() -> bool:
     Build from a venv with the full requirements.txt installed to bake in the
     AI / Graph / attachment features (the spec skips any that are missing).
     """
+    missing = missing_build_deps()
+    if missing:
+        print(f"  Refusing to build: not installed here -> {', '.join(missing)}\n"
+              "  (pip install -r requirements.txt, so the exe has every feature)")
+        return False
     print("  Building dist/InvoiceWarden.exe ...")
     for stale in ("build", "dist"):
         shutil.rmtree(stale, ignore_errors=True)

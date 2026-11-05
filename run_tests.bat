@@ -9,7 +9,7 @@ echo     #   ##  # #   # #   #   #   #    #    ## ## #   #
 echo     #   # # # #   # #   #   #   #    ###  # # #  ###
 echo     #   #  ## #   # #   #   #   #    #    #   # #   #
 echo   ##### #   #   #    ###  ##### #### ##### #   #  ###
-echo   test suite   github.com/Mikeyau-ai/InvoiceWarden
+echo   test suite   sixthdaystudios.com
 echo.
 
 python -m unittest discover -s tests -v

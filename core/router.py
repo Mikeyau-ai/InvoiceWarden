@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 from pathlib import Path
 
 from core.database import Database
@@ -34,6 +35,11 @@ from integrations.provider_base import UploadContext
 from integrations.registry import build_accounting_provider, build_service_provider
 
 log = logging.getLogger(__name__)
+
+#: Serialises the duplicate check -> upload -> record sequence across threads
+#: (the watcher and an Error Log retry could otherwise both pass the check for
+#: the same document and upload it twice).
+_DISPATCH_LOCK = threading.RLock()
 
 
 class Router:
@@ -45,6 +51,8 @@ class Router:
         self._settings = settings
         self._on_new_customer = on_new_customer          # callable(name, pending_id)
         self._emit = emit or (lambda **_: None)          # GUI log pump
+        #: set when a catch-up range guard skipped a file during route()
+        self._range_skipped = False
 
     def _ctx(self, customer, parsed: ParseResult, file_path: Path,
              subject: str) -> UploadContext:
@@ -94,13 +102,16 @@ class Router:
         # to the same mailbox. Filing those against a job would be wrong.
         if parsed.doc_type in NON_INVOICE_KINDS:
             for path in attachments:
-                self._emit(level="INFO", customer_name=parsed.customer_name,
+                # WARN, not INFO: the default log view hides INFO "skipped"
+                # lines, and a misread real invoice must not vanish silently.
+                self._emit(level="WARN", customer_name=parsed.customer_name,
                            invoice_ref=parsed.invoice_ref, platform="-",
                            action="skipped", filename=path.name,
                            message=f"Not a payable document (looks like a "
                                    f"{parsed.doc_type}) - nothing filed.")
             return "not_an_invoice"
 
+        self._range_skipped = False
         customer = self._db.find_customer_by_name(parsed.customer_name)
 
         if customer is None:
@@ -165,7 +176,11 @@ class Router:
             ctx = self._ctx(customer, parsed, path, subject)
             routed_any |= self._dispatch(customer, ctx, targets,
                                          job_floor=job_floor, job_ceiling=job_ceiling)
-        return "routed" if routed_any else "no_route"
+        if routed_any:
+            return "routed"
+        # Distinguish "skipped by the catch-up range" so the caller leaves the
+        # email unprocessed for a later, wider run.
+        return "out_of_range" if self._range_skipped else "no_route"
 
     def _targets_for(self, customer) -> list:
         """Resolve the providers this customer's toggles point at.
@@ -196,6 +211,18 @@ class Router:
         """
         name = (parsed.customer_name or "").strip()
         if not name:
+            return None
+
+        # A regex guess made after the AI call FAILED is not evidence of a
+        # supplier: hold the invoice rather than invent a record from it.
+        if parsed.ai_error:
+            self._emit(level="WARN", customer_name=name,
+                       invoice_ref=parsed.invoice_ref, platform="-",
+                       action="held",
+                       message=f"Supplier '{name}' was NOT added automatically "
+                               f"because the AI parser failed ({parsed.ai_error}). "
+                               f"Fix the AI settings, or add the supplier in the "
+                               f"Suppliers tab, then retry from the Error Log.")
             return None
 
         # Gate only the CREATION of a supplier, not routing: matching an
@@ -236,6 +263,13 @@ class Router:
 
     def _dispatch(self, customer, ctx: UploadContext, targets=None,
                   job_floor: int = 0, job_ceiling: int = 0) -> bool:
+        """Thread-safe wrapper: one document is dispatched at a time."""
+        with _DISPATCH_LOCK:
+            return self._dispatch_locked(customer, ctx, targets,
+                                         job_floor, job_ceiling)
+
+    def _dispatch_locked(self, customer, ctx: UploadContext, targets=None,
+                         job_floor: int = 0, job_ceiling: int = 0) -> bool:
         """Fire each enabled provider for a single file.
 
         ``targets`` is the pre-resolved provider list from :meth:`_targets_for`;
@@ -267,9 +301,12 @@ class Router:
             # filing it, so skip it.
             if provider.category == "service" and self._outside_job_range(
                     ctx.job_number, job_floor, job_ceiling):
-                log.debug("Job %r outside the sweep range [%s, %s] - not filed to %s",
-                          ctx.job_number, job_floor or "-", job_ceiling or "-",
-                          provider.label)
+                self._range_skipped = True
+                self._emit(level="INFO", customer_name=ctx.customer_name,
+                           invoice_ref=ctx.invoice_ref, platform=provider.label,
+                           action="outside range", filename=ctx.file_path.name,
+                           message=f"Job {ctx.job_number or '(unreadable)'} is outside "
+                                   f"the catch-up range - left for a later scan.")
                 continue
             if not provider.configured():
                 self._record_error("config", ctx, provider.label,
@@ -421,5 +458,9 @@ class Router:
                        platform="-", action="retry",
                        message="Customer still not in database.")
             return False
-        return self._dispatch(customer, self._ctx(customer, parsed, path,
-                                                  data.get("email_subject", "")))
+        ok = self._dispatch(customer, self._ctx(customer, parsed, path,
+                                                data.get("email_subject", "")))
+        if ok:
+            # The held invoice is filed: stop pinning its file in the cache.
+            self._db.resolve_pending_by_path(str(path))
+        return ok

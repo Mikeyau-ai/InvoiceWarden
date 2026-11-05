@@ -13,7 +13,7 @@ from logging.handlers import RotatingFileHandler
 import customtkinter as ctk
 
 from config import LOG_DIR, DB_PATH, ensure_dirs
-from core import migrate
+from core import instance, migrate
 from core.crypto import SecretBox
 from core.database import Database
 from core.settings_store import Settings
@@ -41,6 +41,13 @@ def _setup_logging() -> None:
 
 def main() -> None:
     """Build the DB/settings/theme and run the Tk event loop."""
+    lock = instance.acquire()
+    if lock is None:
+        # Another InvoiceWarden already owns the database; running two
+        # watchers could file the same invoice twice.
+        from tkinter import messagebox
+        messagebox.showinfo("InvoiceWarden", "InvoiceWarden is already running.")
+        return
     migrate.run()          # one-time carry-over from the InvoiceM8 era; must precede everything
     _setup_logging()
     autostart = "--autostart" in sys.argv

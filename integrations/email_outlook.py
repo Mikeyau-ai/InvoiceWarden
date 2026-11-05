@@ -55,9 +55,20 @@ class EmailMessage:
     is_unread: bool = True
 
 
+#: Windows device names that are unsafe as file names.
+_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL",
+                   *(f"COM{i}" for i in range(1, 10)),
+                   *(f"LPT{i}" for i in range(1, 10))}
+
+
 def _safe(name: str) -> str:
     """Sanitise a filename for the local cache."""
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_") or "attachment"
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_") or "attachment"
+    # Windows treats CON, NUL, COM1... (with any extension) as devices, so
+    # writing a file with that name would hit the device, not the disk.
+    if safe.split(".")[0].upper() in _RESERVED_NAMES:
+        safe = "file_" + safe
+    return safe
 
 
 def _ext_of(filename: str) -> str:
@@ -214,11 +225,12 @@ class ComBackend(OutlookBackend):
                     continue
                 checked += 1
                 received = item.ReceivedTime
+                # Outlook's ReceivedTime is local wall-clock time; a naive
+                # datetime is interpreted as local by astimezone().
                 received_dt = datetime(
                     received.year, received.month, received.day,
                     received.hour, received.minute, received.second,
-                    tzinfo=timezone.utc,
-                )
+                ).astimezone(timezone.utc)
                 if received_dt <= floor:
                     older += 1
                     if older > 15:               # sorted desc - we're past the window
@@ -334,7 +346,10 @@ class GraphBackend(OutlookBackend):
               headers_only=False):
         """Query the folder, then download attachments for unseen messages."""
         http = self._http()
-        headers = {"Authorization": f"Bearer {self._token()}"}
+        # Ask for plain-text bodies: the default is HTML, whose markup and CSS
+        # eat the AI prompt's 6000-character body budget.
+        headers = {"Authorization": f"Bearer {self._token()}",
+                   "Prefer": 'outlook.body-content-type="text"'}
         # /me is the signed-in mailbox. A different address only works with an
         # org tenant plus admin consent, so only use it when explicitly set.
         base = f"{self.GRAPH}/users/{self._account}" if self._account else f"{self.GRAPH}/me"

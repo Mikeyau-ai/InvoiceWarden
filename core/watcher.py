@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from datetime import datetime, timedelta, timezone
 
 from dateutil import parser as dtparse
@@ -26,6 +25,9 @@ from core.router import Router
 from integrations.email_outlook import account_backends
 
 log = logging.getLogger(__name__)
+
+#: How many times a failing email is attempted before it is recorded as an error.
+_MAX_ATTEMPTS = 3
 
 
 class Watcher:
@@ -50,6 +52,9 @@ class Watcher:
         # which also means "the watcher is not running".
         self._scan_lock = threading.Lock()
         self._catch_up_stop = threading.Event()
+        #: message_id -> consecutive processing failures (retry a few times
+        #: before giving up, so a transient error does not lose the invoice)
+        self._fail_counts: dict[str, int] = {}
 
     # -- lifecycle ---------------------------------------------------
     @property
@@ -164,9 +169,12 @@ class Watcher:
         if not last:
             return None
         try:
-            return dtparse.isoparse(last).astimezone(timezone.utc)
+            point = dtparse.isoparse(last).astimezone(timezone.utc)
         except (ValueError, TypeError):
             return None
+        # A stored time in the future (forged Date header, clock error) would
+        # hide every later email, so never look from beyond "now".
+        return min(point, datetime.now(timezone.utc))
 
     def _back_check(self) -> None:
         """Startup sweep: unread + anything since we last ran."""
@@ -243,6 +251,11 @@ class Watcher:
             try:
                 parsed = self._parser.parse(msg.subject, msg.body, msg.attachments,
                                             sender=msg.sender)
+                if parsed.ai_error:
+                    self._emit(level="WARN", action="parse",
+                               message=f"AI parsing failed ({parsed.ai_error}); "
+                                       f"used the basic text reader instead - "
+                                       f"results may be wrong. Check Settings > AI.")
                 self._emit(level="INFO", customer_name=parsed.customer_name,
                            invoice_ref=parsed.invoice_ref, platform="-", action="parsed",
                            message=f"job={parsed.job_number or '-'} "
@@ -253,11 +266,22 @@ class Watcher:
                                             job_ceiling=job_ceiling)
             except Exception as exc:
                 log.exception("Message processing failed")
+                fails = self._fail_counts.get(msg.message_id, 0) + 1
+                self._fail_counts[msg.message_id] = fails
+                self._emit(level="ERROR", action="parse",
+                           message=f"'{msg.subject}' failed (attempt {fails}/"
+                                   f"{_MAX_ATTEMPTS}): {exc}")
+                if fails < _MAX_ATTEMPTS:
+                    continue            # leave unprocessed: try again next poll
                 self._db.add_error(stage="parse", filename=msg.subject,
-                                   error=str(exc))
-                self._emit(level="ERROR", action="parse", message=str(exc))
+                                   error=f"Gave up after {fails} attempts: {exc}")
                 result = "error"
+            self._fail_counts.pop(msg.message_id, None)
 
+            if result == "out_of_range":
+                # Skipped only by a catch-up range: a later, wider scan (or
+                # the routine poll) should still be able to file it.
+                continue
             self._db.mark_email_processed(
                 msg.message_id,
                 received_at=msg.received_at.isoformat(),

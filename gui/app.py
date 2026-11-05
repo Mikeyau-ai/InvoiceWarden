@@ -170,11 +170,12 @@ class App(ctk.CTk):
         if self._closing:
             return
         event.setdefault("ts", datetime.now(timezone.utc).isoformat(timespec="seconds"))
-        # Persist non-error activity; errors are written by the router itself.
-        if event.get("level") != "ERROR":
-            self.db.add_activity(**{k: event.get(k, "") for k in
-                                    ("ts", "level", "customer_name", "invoice_ref",
-                                     "platform", "action", "filename", "message")})
+        # Persist every event, errors included: watcher failures (a mailbox
+        # whose sign-in expired, a failed poll) have no error_log row, so
+        # without this they vanished on restart.
+        self.db.add_activity(**{k: event.get(k, "") for k in
+                                ("ts", "level", "customer_name", "invoice_ref",
+                                 "platform", "action", "filename", "message")})
         self._events.put(event)
 
     def _pump(self) -> None:

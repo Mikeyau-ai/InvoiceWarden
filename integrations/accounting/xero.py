@@ -8,6 +8,7 @@ Docs: https://developer.xero.com/documentation/api/accounting/attachments
 from __future__ import annotations
 
 import mimetypes
+import urllib.parse
 import webbrowser
 
 import requests
@@ -98,14 +99,25 @@ class XeroProvider(Provider):
 
     def upload_invoice(self, ctx: UploadContext) -> UploadResult:
         """Find or draft the matching AP document, then attach the file to it."""
+        ref = (ctx.invoice_ref or "").strip()
+        if not ref:
+            # A blank number would match (and attach to) an unrelated bill.
+            return UploadResult(False, self.label,
+                                "No invoice number was read, so it cannot be "
+                                "matched safely in Xero. Set the reference and retry.")
+        if '"' in ref:
+            return UploadResult(False, self.label,
+                                "The invoice number contains a double quote, "
+                                "which cannot be searched safely in Xero.")
         try:
             headers = self._headers()
             acct_code = self._settings.get("xero.default_account_code", "400")
+            fname = urllib.parse.quote(ctx.file_path.name, safe="")
 
             if ctx.is_credit:
                 # Accounts-payable credit note (ACCPAYCREDIT).
                 where = requests.utils.quote(
-                    f'Type=="ACCPAYCREDIT" AND CreditNoteNumber=="{ctx.invoice_ref}"')
+                    f'Type=="ACCPAYCREDIT" AND CreditNoteNumber=="{ref}"')
                 found = self.http.get(f"{API}/CreditNotes?where={where}", headers=headers, timeout=25)
                 found.raise_for_status()
                 existing = found.json().get("CreditNotes", [])
@@ -128,11 +140,11 @@ class XeroProvider(Provider):
                     made = self.http.post(f"{API}/CreditNotes", headers=headers, json=body, timeout=30)
                     made.raise_for_status()
                     doc_id = made.json()["CreditNotes"][0]["CreditNoteID"]
-                attach_url = f"{API}/CreditNotes/{doc_id}/Attachments/{ctx.file_path.name}"
+                attach_url = f"{API}/CreditNotes/{doc_id}/Attachments/{fname}"
                 noun = "credit note"
             else:
                 where = requests.utils.quote(
-                    f'Type=="ACCPAY" AND InvoiceNumber=="{ctx.invoice_ref}"')
+                    f'Type=="ACCPAY" AND InvoiceNumber=="{ref}"')
                 found = self.http.get(f"{API}/Invoices?where={where}", headers=headers, timeout=25)
                 found.raise_for_status()
                 invoices = found.json().get("Invoices", [])
@@ -155,7 +167,7 @@ class XeroProvider(Provider):
                     made = self.http.post(f"{API}/Invoices", headers=headers, json=body, timeout=30)
                     made.raise_for_status()
                     doc_id = made.json()["Invoices"][0]["InvoiceID"]
-                attach_url = f"{API}/Invoices/{doc_id}/Attachments/{ctx.file_path.name}"
+                attach_url = f"{API}/Invoices/{doc_id}/Attachments/{fname}"
                 noun = "bill"
 
             mime = mimetypes.guess_type(ctx.file_path.name)[0] or "application/pdf"
