@@ -41,6 +41,10 @@ _bundle("customtkinter")
 if os.path.exists("CHANGELOG.md"):
     datas.append(("CHANGELOG.md", "."))
 
+# Ship the third-party licence notices alongside the exe's own data.
+if os.path.exists("THIRD_PARTY_NOTICES.md"):
+    datas.append(("THIRD_PARTY_NOTICES.md", "."))
+
 # The window/taskbar icon must exist at runtime too, not just be stamped into
 # the exe header - iconbitmap() reads the actual file.
 if os.path.exists("assets/icon.ico"):

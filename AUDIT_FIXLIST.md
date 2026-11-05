@@ -45,3 +45,7 @@ code). Status: **FIXED** (in working tree, not committed/released) or **OPEN**.
 - Release: single signing key with no rotation/revocation; unpinned build toolchain; no lockfile; no CI; unsigned exe.
 - Missing tests: provider HTTP clients beyond the above, email backend parsing, GUI.
 - Licensing: no LICENSE/NOTICE file shipped with the exe for bundled third-party code (see audit report).
+
+## Fixed after 1.0.43 (committed, not yet released)
+- F26: multi-attachment emails are parsed and routed per attachment (`watcher._poll`).
+- F27: `THIRD_PARTY_NOTICES.md` added and bundled into the exe via `InvoiceWarden.spec`. The project's own LICENSE is still the owner's decision.

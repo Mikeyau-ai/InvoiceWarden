@@ -156,6 +156,17 @@ class TestWatcherState(TempDbCase):
         w._poll(since=None, unread_only=False, job_floor=5000)
         self.assertFalse(self.db.is_email_processed("m1"))
 
+    def test_f26_each_attachment_is_parsed_and_routed_separately(self) -> None:
+        """Two invoices in one email are two documents, not one plus a duplicate."""
+        msg = self._msg()
+        msg.attachments = [self.make_pdf("a.pdf"), self.make_pdf("b.pdf")]
+        w = self._watcher([msg])
+        w._parser.parse = MagicMock(return_value=ParseResult(customer_name="X"))
+        w._router.route = MagicMock(return_value="routed")
+        w._poll(since=None, unread_only=False)
+        self.assertEqual(w._parser.parse.call_count, 2)
+        self.assertEqual([len(c.args[1]) for c in w._router.route.call_args_list], [1, 1])
+
     def test_f5_ai_failure_is_reported(self) -> None:
         """When the AI failed and regex took over, the user is told."""
         w = self._watcher([self._msg()])

@@ -30,6 +30,20 @@ log = logging.getLogger(__name__)
 _MAX_ATTEMPTS = 3
 
 
+def _combine_results(results: list[str]) -> str:
+    """One result tag for an email whose attachments were routed separately.
+
+    Any file left for a later scan keeps the whole email open; otherwise the
+    most useful outcome wins (routed beats held beats nothing filed).
+    """
+    if "out_of_range" in results:
+        return "out_of_range"
+    for tag in ("routed", "pending_new_customer", "no_route", "not_an_invoice"):
+        if tag in results:
+            return tag
+    return results[0] if results else "no_route"
+
+
 class Watcher:
     """Owns the polling thread and its lifecycle."""
 
@@ -249,21 +263,30 @@ class Watcher:
             self._emit(level="INFO", customer_name="", platform="-", action="found",
                        message=f"Processing '{msg.subject}' from {msg.sender}")
             try:
-                parsed = self._parser.parse(msg.subject, msg.body, msg.attachments,
-                                            sender=msg.sender)
-                if parsed.ai_error:
-                    self._emit(level="WARN", action="parse",
-                               message=f"AI parsing failed ({parsed.ai_error}); "
-                                       f"used the basic text reader instead - "
-                                       f"results may be wrong. Check Settings > AI.")
-                self._emit(level="INFO", customer_name=parsed.customer_name,
-                           invoice_ref=parsed.invoice_ref, platform="-", action="parsed",
-                           message=f"job={parsed.job_number or '-'} "
-                                   f"ref={parsed.invoice_ref or '-'} "
-                                   f"conf={parsed.confidence:.2f} src={parsed.source}")
-                result = self._router.route(parsed, msg.attachments, msg.subject,
-                                            msg.sender, job_floor=job_floor,
-                                            job_ceiling=job_ceiling)
+                # Each attachment is its own document: parse and route them one
+                # at a time, so a second invoice in the same email is not
+                # mistaken for a duplicate of the first.
+                groups = ([[a] for a in msg.attachments]
+                          if len(msg.attachments) > 1 else [msg.attachments])
+                results = []
+                for group in groups:
+                    parsed = self._parser.parse(msg.subject, msg.body, group,
+                                                sender=msg.sender)
+                    if parsed.ai_error:
+                        self._emit(level="WARN", action="parse",
+                                   message=f"AI parsing failed ({parsed.ai_error}); "
+                                           f"used the basic text reader instead - "
+                                           f"results may be wrong. Check Settings > AI.")
+                    self._emit(level="INFO", customer_name=parsed.customer_name,
+                               invoice_ref=parsed.invoice_ref, platform="-",
+                               action="parsed",
+                               message=f"job={parsed.job_number or '-'} "
+                                       f"ref={parsed.invoice_ref or '-'} "
+                                       f"conf={parsed.confidence:.2f} src={parsed.source}")
+                    results.append(self._router.route(
+                        parsed, group, msg.subject, msg.sender,
+                        job_floor=job_floor, job_ceiling=job_ceiling))
+                result = _combine_results(results)
             except Exception as exc:
                 log.exception("Message processing failed")
                 fails = self._fail_counts.get(msg.message_id, 0) + 1
