@@ -49,6 +49,9 @@ class App(ctk.CTk):
         # Thread-safe channels from the watcher into the GUI.
         self._events: queue.Queue[dict] = queue.Queue()
         self._new_customers: queue.Queue[tuple[str, int]] = queue.Queue()
+        # Callables handed over by worker threads to run on the Tk thread
+        # (Tk itself must only be touched from the thread that owns it).
+        self._ui_calls: queue.Queue = queue.Queue()
 
         self.title(f"InvoiceWarden  v{APP_VERSION}")
         self.geometry("1080x720")
@@ -178,10 +181,19 @@ class App(ctk.CTk):
                                  "platform", "action", "filename", "message")})
         self._events.put(event)
 
+    def run_on_ui(self, fn) -> None:
+        """Thread-safe: have ``fn()`` run on the Tk thread at the next pump."""
+        self._ui_calls.put(fn)
+
     def _pump(self) -> None:
         """Drain queues and update the UI. Rescheduled every 400 ms."""
         if self._closing:
             return
+        try:
+            while True:
+                self._ui_calls.get_nowait()()
+        except queue.Empty:
+            pass
         try:
             while True:
                 self.logs_tab.append_live(self._events.get_nowait())
@@ -228,7 +240,7 @@ class App(ctk.CTk):
                     self._update_shown = True
                     UpdateDialog(self, info)
                     on_result(f"Version {info.version} available.")
-            self.after(0, show)
+            self.run_on_ui(show)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -314,7 +326,7 @@ class App(ctk.CTk):
         self._catchup_spin_start()
         self.watcher.catch_up(dlg.result["days_back"], dlg.result["job_floor"],
                               dlg.result["job_ceiling"],
-                              on_done=lambda: self.after(0, done))
+                              on_done=lambda: self.run_on_ui(done))
 
     def _catchup_spin_start(self) -> None:
         """Disable the Catch up button and start its cycling-glyph spinner."""
@@ -387,6 +399,9 @@ class App(ctk.CTk):
         """Called by the Settings tab after a save."""
         self._refresh_tagline()
         self.customers_tab.refresh()
+        # Credentials or the chosen systems may have changed.
+        self.watcher.reset_providers()
+        self.errors_tab.reset_providers()
 
     def refresh_logs(self) -> None:
         """Repaint the activity log from the DB."""

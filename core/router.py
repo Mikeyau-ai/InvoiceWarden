@@ -53,6 +53,22 @@ class Router:
         self._emit = emit or (lambda **_: None)          # GUI log pump
         #: set when a catch-up range guard skipped a file during route()
         self._range_skipped = False
+        #: provider key -> live instance. Reused across emails so each keeps
+        #: its HTTP connection and access token instead of re-authenticating
+        #: (and, for Xero/QuickBooks, rotating the refresh token) every time.
+        self._providers: dict = {}
+        #: error_log row being retried, so a repeat failure updates that row
+        #: rather than adding another card for the same invoice.
+        self._retry_error_id: int | None = None
+
+    def reset_providers(self) -> None:
+        """Forget cached providers (call after settings change)."""
+        self._providers.clear()
+
+    def _provider(self, build):
+        """The cached instance for whichever provider ``build`` selects."""
+        fresh = build(self._settings)
+        return self._providers.setdefault(fresh.key, fresh)
 
     def _ctx(self, customer, parsed: ParseResult, file_path: Path,
              subject: str) -> UploadContext:
@@ -161,8 +177,6 @@ class Router:
             return "pending_new_customer"
 
         allowed = set(customer["file_types"].split(","))
-        # Resolved once per email, not per attachment: building a provider
-        # refreshes OAuth tokens.
         targets = self._targets_for(customer)
         routed_any = False
         for path in attachments:
@@ -191,11 +205,11 @@ class Router:
         """
         targets = []
         if customer["servicem8_enabled"]:
-            prov = build_service_provider(self._settings)
+            prov = self._provider(build_service_provider)
             if prov.key != "none":
                 targets.append(prov)
         if customer["accounting_enabled"]:
-            prov = build_accounting_provider(self._settings)
+            prov = self._provider(build_accounting_provider)
             if prov.key != "none" and prov.key not in {t.key for t in targets}:
                 targets.append(prov)
         return targets
@@ -419,20 +433,43 @@ class Router:
             "invoice_ref": ctx.invoice_ref,
             "amount_total": ctx.amount_total,
             "invoice_date": ctx.invoice_date,
+            # Without these a retried credit note is re-filed as an invoice,
+            # and an invoice whose job was only among the candidates can
+            # never find it again.
+            "doc_type": ctx.doc_type,
+            "job_candidates": list(ctx.job_candidates or []),
             "file_path": str(ctx.file_path),
             "email_subject": ctx.email_subject,
             "platform": platform,
         })
-        self._db.add_error(stage=stage, customer_name=ctx.customer_name,
-                           invoice_ref=ctx.invoice_ref, filename=ctx.file_path.name,
-                           error=f"[{platform}] {message}", payload=payload)
+        if self._retry_error_id is not None:
+            # A retry that fails again: refresh the card being retried.
+            self._db.update_error(self._retry_error_id,
+                                  f"[{platform}] {message}", payload)
+        else:
+            self._db.add_error(stage=stage, customer_name=ctx.customer_name,
+                               invoice_ref=ctx.invoice_ref, filename=ctx.file_path.name,
+                               error=f"[{platform}] {message}", payload=payload)
         self._emit(level="ERROR", customer_name=ctx.customer_name,
                    invoice_ref=ctx.invoice_ref, platform=platform, action="error",
                    filename=ctx.file_path.name, message=message)
 
     # -- retry from the Error tab -----------------------------------
-    def retry_from_payload(self, payload_json: str) -> bool:
-        """Re-run a single failed upload from its stored JSON snapshot."""
+    def retry_from_payload(self, payload_json: str,
+                           error_id: int | None = None) -> bool:
+        """Re-run a single failed upload from its stored JSON snapshot.
+
+        ``error_id`` is the error_log row being retried; a repeat failure
+        updates that row instead of logging a second one.
+        """
+        self._retry_error_id = error_id
+        try:
+            return self._retry(payload_json)
+        finally:
+            self._retry_error_id = None
+
+    def _retry(self, payload_json: str) -> bool:
+        """Body of :meth:`retry_from_payload`."""
         data = json.loads(payload_json)
         parsed = ParseResult(
             customer_name=data.get("customer_name", ""),

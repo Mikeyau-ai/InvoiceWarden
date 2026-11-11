@@ -3,6 +3,36 @@
 All notable changes to InvoiceM8. Newest first. Bump `version.py` and add an
 entry here for every release.
 
+## 1.0.45
+- **Attachments from different emails can no longer be mixed up.** Each email now
+  keeps its files in its own folder, so two emails that both attach "Invoice.pdf"
+  are each read and filed correctly. Old cached files are also cleaned up properly now.
+- **A new Microsoft mailbox only looks back 14 days** on its first scan, the same
+  as Outlook desktop and IMAP mailboxes, instead of reaching back through old mail.
+- **Retrying from the Error Log works properly.** A retried credit note stays a
+  credit note, a retry can still find the job from the other numbers on the
+  invoice, and retrying again no longer adds a second copy of the same error.
+- **Xero and MYOB only attach to the right supplier's bill.** A bill with the same
+  invoice number from a different supplier is no longer matched. The supplier's
+  "Accounting contact / supplier ID" is now used when it is filled in.
+- **Each mailbox keeps its own place.** If one mailbox was unreachable for a
+  while, its missed invoices are picked up when it comes back.
+- **An invoice that fails is always tried again**, even when newer emails arrive
+  in the meantime.
+- **A short AI outage no longer leads to guesswork.** If the AI service is
+  briefly unavailable the email is tried again on the next scans before the
+  basic text reader is used.
+- **Suppliers written slightly differently are recognised as the same one**, for
+  example "Acme Pty Ltd" and "ACME PTY. LIMITED".
+- **Much less downloading.** Emails already handled, and attachments of types you
+  don't use, are no longer downloaded again on every scan.
+- **Faster uploads.** Connections to ServiceM8 and your accounting system are kept
+  open between invoices, and jobs are found with fewer lookups.
+- **Microsoft mailbox sub-folders work by name**, for a top-level folder or a
+  folder directly inside the Inbox.
+- **Word invoices are read more fully** (tables included), and long PDFs are read faster.
+- **A stalled IMAP mail server can no longer freeze scanning.**
+
 ## 1.0.44
 - **Emails with several invoices now file each one.** Every attachment is read
   and filed separately, instead of the second being skipped as a duplicate.

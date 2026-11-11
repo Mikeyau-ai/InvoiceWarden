@@ -41,6 +41,10 @@ class ErrorsTab:
         self._list.pack(fill="both", expand=True)
         self.refresh()
 
+    def reset_providers(self) -> None:
+        """Drop cached upload providers after a settings change."""
+        self._router.reset_providers()
+
     def refresh(self) -> None:
         """Rebuild the card list from the error log."""
         for w in self._list.winfo_children():
@@ -88,7 +92,7 @@ class ErrorsTab:
         def work() -> None:
             """Worker thread: run the retry and note success or the error."""
             try:
-                outcome["ok"] = bool(row["payload"]) and                     self._router.retry_from_payload(row["payload"])
+                outcome["ok"] = bool(row["payload"]) and                     self._router.retry_from_payload(row["payload"], error_id=row["id"])
             except Exception as exc:
                 outcome["ok"] = False
                 outcome["error"] = str(exc)

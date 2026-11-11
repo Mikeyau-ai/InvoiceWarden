@@ -24,6 +24,7 @@ Two arguments shape how much work a fetch does:
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -71,6 +72,36 @@ def _safe(name: str) -> str:
     return safe
 
 
+def cache_bucket(message_id: str) -> Path:
+    """Cache sub-folder holding one message's attachments.
+
+    Named from a hash of the WHOLE id: Outlook and Graph ids share a long
+    prefix across every message in a mailbox, so a truncated id put the whole
+    mailbox in one folder and same-named attachments overwrote each other.
+    """
+    digest = hashlib.sha1(str(message_id).encode("utf-8", "replace")).hexdigest()
+    return ATTACHMENT_CACHE / digest[:24]
+
+
+#: Folder names Graph accepts directly in a mailFolders path (lower-cased).
+_GRAPH_WELL_KNOWN = {"inbox", "archive", "drafts", "sentitems", "deleteditems",
+                     "junkemail", "outbox"}
+
+
+def unique_name(fname: str, used: set[str]) -> str:
+    """``fname``, or a numbered variant if this message already used it.
+
+    Two attachments on one email can share a file name; without this the
+    second overwrote the first in the cache.
+    """
+    name, n = fname, 1
+    while name.lower() in used:
+        n += 1
+        name = f"{n}_{fname}"
+    used.add(name.lower())
+    return name
+
+
 def _ext_of(filename: str) -> str:
     """Lower-case extension of a filename, without the dot ('' if none)."""
     return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -81,6 +112,9 @@ class OutlookBackend:
 
     #: human-readable summary of the last fetch, shown when it returns nothing
     last_scan: str = ""
+    #: ids the last fetch looked at and found no wanted attachment on. The
+    #: watcher remembers these so they are not downloaded again every poll.
+    skipped_ids: tuple = ()
 
     def fetch(self, since: datetime | None, unread_only: bool,
               allowed_ext: set[str], seen_ids: set[str] = frozenset(),
@@ -100,6 +134,7 @@ class ComBackend(OutlookBackend):
         self._account = (account or "").strip()
         self._folder = (folder or "").strip() or "Inbox"
         self.last_scan = ""
+        self.skipped_ids = []
 
     def _inbox(self):
         """Resolve the target folder. Returns (folder, human_description)."""
@@ -217,6 +252,7 @@ class ComBackend(OutlookBackend):
 
         checked = older = read_skip = no_attach = already = 0
         results: list[EmailMessage] = []
+        self.skipped_ids = []
         for idx, item in enumerate(items):
             if idx >= 1000:                       # hard cap on how far we scan
                 break
@@ -249,10 +285,11 @@ class ComBackend(OutlookBackend):
                     continue
 
                 saved: list[Path] = []
+                used: set[str] = set()
                 matched = 0
                 # One sub-folder per message keeps the original file name clean
                 # (the parser uses it as a hint) while staying collision-free.
-                bucket = ATTACHMENT_CACHE / entry_id[:24]
+                bucket = cache_bucket(entry_id)
                 for att in item.Attachments:
                     fname = _safe(att.FileName)
                     if allowed_ext and _ext_of(fname) not in allowed_ext:
@@ -261,12 +298,13 @@ class ComBackend(OutlookBackend):
                     if headers_only:
                         continue
                     bucket.mkdir(parents=True, exist_ok=True)
-                    dest = bucket / fname
+                    dest = bucket / unique_name(fname, used)
                     att.SaveAsFile(str(dest))
                     saved.append(dest)
 
                 if not matched:
                     no_attach += 1
+                    self.skipped_ids.append(entry_id)
                     continue
 
                 results.append(EmailMessage(
@@ -322,6 +360,7 @@ class GraphBackend(OutlookBackend):
         self._folder = (folder or "").strip() or "Inbox"
         self._session = None
         self.last_scan = ""
+        self.skipped_ids = []
 
     def _token(self) -> str:
         """Access token from the cached device-code sign-in."""
@@ -342,9 +381,31 @@ class GraphBackend(OutlookBackend):
         """Graph timestamps are ISO-8601 with a 'Z' suffix Python won't take."""
         return datetime.fromisoformat((value or "").replace("Z", "+00:00"))
 
+    def _folder_ref(self, http, base: str, headers: dict) -> str:
+        """Path segment for the configured folder: a well-known name or an id.
+
+        Graph only accepts well-known names (inbox, archive, ...) or folder ids
+        in the path, so any other display name is looked up among the top-level
+        folders and the Inbox's direct sub-folders. Unmatched names are passed
+        through unchanged, which lets a pasted folder id keep working.
+        """
+        name = self._folder
+        key = name.replace(" ", "").lower()
+        if key in _GRAPH_WELL_KNOWN:
+            return key
+        for url in (f"{base}/mailFolders", f"{base}/mailFolders/inbox/childFolders"):
+            resp = http.get(url, headers=headers, timeout=30,
+                            params={"$top": "200", "$select": "id,displayName"})
+            if not resp.ok:
+                continue
+            for folder in resp.json().get("value", []):
+                if (folder.get("displayName") or "").strip().lower() == name.lower():
+                    return folder["id"]
+        return name
+
     def fetch(self, since, unread_only, allowed_ext, seen_ids=frozenset(),
               headers_only=False):
-        """Query the folder, then download attachments for unseen messages."""
+        """List the folder, then download attachments for unseen messages only."""
         http = self._http()
         # Ask for plain-text bodies: the default is HTML, whose markup and CSS
         # eat the AI prompt's 6000-character body budget.
@@ -355,34 +416,28 @@ class GraphBackend(OutlookBackend):
         base = f"{self.GRAPH}/users/{self._account}" if self._account else f"{self.GRAPH}/me"
         select = ("id,subject,from,receivedDateTime,isRead,"
                   "hasAttachments,body")
-        url = f"{base}/mailFolders/{self._folder}/messages"
+        url = f"{base}/mailFolders/{self._folder_ref(http, base, headers)}/messages"
+
+        # First run (no `since`): only look back a bounded window, not forever.
+        floor = (since or (datetime.now(timezone.utc)
+                           - timedelta(days=FIRST_SCAN_LOOKBACK_DAYS))).astimezone(timezone.utc)
 
         # Graph rejects some filter+sort combinations outright with
         # "InefficientFilter: The restriction or sort order is too complex for
-        # this operation" - notably filtering on hasAttachments while sorting
-        # by receivedDateTime. Try progressively simpler queries and do the
+        # this operation". Try progressively simpler queries and do the
         # remaining narrowing locally; correctness never depends on the server
-        # honouring the filter.
-        since_iso = (since.astimezone(timezone.utc).isoformat()
-                     if since else None)
+        # honouring the filter. Attachments are NOT expanded here: that put
+        # every attachment's bytes in the list response, so mail already
+        # handled was downloaded again on every poll.
         base_params: dict = {"$top": "100", "$select": select}
-        # Expanding attachments folds the per-message attachment call into the
-        # list response. Skipped for a headers-only probe, which wants none of
-        # those bytes, and dropped from the retry ladder if Graph rejects it.
-        expand = {} if headers_only else {"$expand": "attachments"}
-        attempts: list[dict] = []
-        if since_iso:
-            f = [f"receivedDateTime ge {since_iso}"]
-            if unread_only:
-                f.append("isRead eq false")
-            attempts.append({**base_params, **expand, "$filter": " and ".join(f)})
+        f = [f"receivedDateTime ge {floor.strftime('%Y-%m-%dT%H:%M:%SZ')}"]
         if unread_only:
-            attempts.append({**base_params, **expand, "$filter": "isRead eq false"})
+            f.append("isRead eq false")
+        attempts: list[dict] = [{**base_params, "$filter": " and ".join(f)}]
+        if unread_only:
+            attempts.append({**base_params, "$filter": "isRead eq false"})
         # Last resort: newest N, filtered entirely on this side.
-        attempts.append({**base_params, **expand,
-                         "$orderby": "receivedDateTime desc"})
-        if expand:  # same ladder again without the expand, in case that was the problem
-            attempts.append({**base_params, "$orderby": "receivedDateTime desc"})
+        attempts.append({**base_params, "$orderby": "receivedDateTime desc"})
 
         value = None
         used: dict = {}
@@ -391,9 +446,9 @@ class GraphBackend(OutlookBackend):
             resp = http.get(url, headers=headers, params=params, timeout=30)
             if resp.status_code == 404:
                 raise RuntimeError(
-                    f"Graph could not find folder '{self._folder}'. Use a "
-                    "well-known name like Inbox, or the exact display name of "
-                    "a sub-folder.")
+                    f"Graph could not find folder '{self._folder}'. Use Inbox, "
+                    "or the exact name of a top-level folder or of a folder "
+                    "directly inside the Inbox.")
             if resp.ok:
                 body = resp.json()
                 value, used = body.get("value", []), params
@@ -402,6 +457,12 @@ class GraphBackend(OutlookBackend):
                 pages = 1
                 next_link = body.get("@odata.nextLink")
                 while next_link and pages < MAX_GRAPH_PAGES:
+                    # Newest-first listing: once a page reaches mail older
+                    # than the window there is nothing further to find.
+                    if "$orderby" in params and value and \
+                            self._parse_dt(value[-1]["receivedDateTime"]) < floor:
+                        next_link = None
+                        break
                     nxt = http.get(next_link, headers=headers, timeout=30)
                     if not nxt.ok:
                         log.warning("Graph pagination stopped at page %d (%s).",
@@ -420,34 +481,29 @@ class GraphBackend(OutlookBackend):
         if value is None:
             raise RuntimeError(f"Graph error {last_err}")
 
-        # Apply locally whatever the server was not asked to enforce.
-        applied = used.get("$filter", "")
-        if "hasAttachments" not in applied:
-            value = [m for m in value if m.get("hasAttachments")]
-        if unread_only and "isRead" not in applied:
+        # Apply locally whatever the server was not asked to enforce. The date
+        # window is always re-checked: it is cheap and never trusts the server.
+        value = [m for m in value if m.get("hasAttachments")]
+        if unread_only:
             value = [m for m in value if not m.get("isRead", True)]
         # Parse each timestamp once and carry it alongside the message.
         dated = [(m, self._parse_dt(m["receivedDateTime"])) for m in value]
-        if since and "receivedDateTime" not in applied:
-            dated = [(m, dt) for m, dt in dated if dt > since]
+        dated = [(m, dt) for m, dt in dated if dt >= floor]
 
         results: list[EmailMessage] = []
+        self.skipped_ids = []
         already = 0
         for msg, received_dt in dated:
             # Skip already-handled mail BEFORE fetching any attachment bytes.
             if msg["id"] in seen_ids:
                 already += 1
                 continue
-            if headers_only:
-                saved: list[Path] = []
-            elif "attachments" in msg:
-                saved = self._save_expanded(msg["id"], msg["attachments"], allowed_ext)
-            else:
+            saved: list[Path] = []
+            if not headers_only:
                 saved = self._download_attachments(base, msg["id"], headers, allowed_ext)
                 if not saved:
+                    self.skipped_ids.append(msg["id"])
                     continue
-            if not headers_only and not saved:
-                continue
             results.append(EmailMessage(
                 message_id=msg["id"],
                 subject=msg.get("subject", ""),
@@ -471,17 +527,13 @@ class GraphBackend(OutlookBackend):
                                "newer than the last check.")
         return results
 
-    @staticmethod
-    def _bucket_for(msg_id: str) -> Path:
-        """Cache sub-folder for one message's attachments."""
-        return ATTACHMENT_CACHE / re.sub(r"[^A-Za-z0-9]", "", msg_id)[:24]
-
     def _save_expanded(self, msg_id: str, attachments: list, allowed_ext: set[str]) -> list[Path]:
-        """Write attachments already inlined by ``$expand=attachments``."""
+        """Write attachments whose bytes arrived inline (base64 ``contentBytes``)."""
         import base64
 
         out: list[Path] = []
-        bucket = self._bucket_for(msg_id)
+        used: set[str] = set()
+        bucket = cache_bucket(msg_id)
         for att in attachments or []:
             if att.get("@odata.type") != "#microsoft.graph.fileAttachment":
                 continue
@@ -493,7 +545,7 @@ class GraphBackend(OutlookBackend):
                 continue
             data = base64.b64decode(raw)
             bucket.mkdir(parents=True, exist_ok=True)
-            dest = bucket / fname
+            dest = bucket / unique_name(fname, used)
             # Identical bytes already cached: keep the path, skip the write.
             if not (dest.exists() and dest.stat().st_size == len(data)):
                 dest.write_bytes(data)
@@ -501,11 +553,42 @@ class GraphBackend(OutlookBackend):
         return out
 
     def _download_attachments(self, base, msg_id, headers, allowed_ext):
-        """Fallback path: pull one message's attachments in a separate call."""
-        resp = self._http().get(f"{base}/messages/{msg_id}/attachments",
-                                headers=headers, timeout=30)
-        resp.raise_for_status()
-        return self._save_expanded(msg_id, resp.json().get("value", []), allowed_ext)
+        """Save one message's wanted attachments; [] when it has none.
+
+        The attachments are listed by name first and only the wanted ones are
+        downloaded, as raw bytes streamed to disk. If the server refuses the
+        name-only listing, fall back to one call that returns everything.
+        """
+        http = self._http()
+        url = f"{base}/messages/{msg_id}/attachments"
+        listing = http.get(url, headers=headers, timeout=30,
+                           params={"$select": "id,name,size"})
+        if not listing.ok:
+            resp = http.get(url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            return self._save_expanded(msg_id, resp.json().get("value", []), allowed_ext)
+
+        out: list[Path] = []
+        used: set[str] = set()
+        bucket = cache_bucket(msg_id)
+        for att in listing.json().get("value", []):
+            # Only real files: an attached email or a cloud link has no bytes.
+            if att.get("@odata.type", "#microsoft.graph.fileAttachment") \
+                    != "#microsoft.graph.fileAttachment":
+                continue
+            fname = _safe(att.get("name") or "attachment")
+            if allowed_ext and _ext_of(fname) not in allowed_ext:
+                continue
+            resp = http.get(f"{url}/{att['id']}/$value", headers=headers,
+                            timeout=60, stream=True)
+            resp.raise_for_status()
+            bucket.mkdir(parents=True, exist_ok=True)
+            dest = bucket / unique_name(fname, used)
+            with dest.open("wb") as fh:
+                for chunk in resp.iter_content(1 << 16):
+                    fh.write(chunk)
+            out.append(dest)
+        return out
 
 
 def build_backend(settings) -> OutlookBackend:

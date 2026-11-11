@@ -22,7 +22,7 @@ from core.database import Database
 from core.housekeeping import prune_attachment_cache
 from core.parser_ai import InvoiceParser
 from core.router import Router
-from integrations.email_outlook import account_backends
+from integrations.email_outlook import FIRST_SCAN_LOOKBACK_DAYS, account_backends
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +69,20 @@ class Watcher:
         #: message_id -> consecutive processing failures (retry a few times
         #: before giving up, so a transient error does not lose the invoice)
         self._fail_counts: dict[str, int] = {}
+        #: message_id -> received time of each email awaiting another attempt.
+        #: The scan must keep reaching back to these: the resume point moves
+        #: on as soon as a newer email is handled, which used to leave a
+        #: failed email behind it, never retried and never reported.
+        self._retry_from: dict[str, datetime] = {}
+        #: ids of emails found to carry no wanted attachment, remembered for
+        #: this session so they are not downloaded again on every poll. Reset
+        #: when the wanted file types change (``_ignored_ext``).
+        self._ignored_ids: set[str] = set()
+        self._ignored_ext: set[str] | None = None
+
+    def reset_providers(self) -> None:
+        """Drop cached upload providers after a settings change."""
+        self._router.reset_providers()
 
     # -- lifecycle ---------------------------------------------------
     @property
@@ -171,31 +185,43 @@ class Watcher:
                 break
             try:
                 with self._scan_lock:   # never overlap a catch-up sweep
-                    self._poll(since=self._resume_point(),
+                    self._poll(since=None,
                                unread_only=self._settings.get_bool("watcher.unread_only"))
             except Exception as exc:
                 log.exception("Poll failed")
                 self._emit(level="ERROR", action="poll", message=str(exc))
 
-    def _resume_point(self) -> datetime | None:
-        """Timestamp to fetch mail from - the newest email we have handled."""
-        last = self._db.last_seen_email_time()
+    def _resume_point(self, account_id: int | None = None) -> datetime | None:
+        """Timestamp to fetch mail from - the newest email we have handled.
+
+        Tracked per mailbox (``account_id``): with one shared point, a mailbox
+        that was unreachable for a while lost its backlog as soon as another
+        mailbox handled something newer.
+        """
+        last = self._db.last_seen_email_time(account_id)
         if not last:
             return None
         try:
             point = dtparse.isoparse(last).astimezone(timezone.utc)
         except (ValueError, TypeError):
             return None
+        now = datetime.now(timezone.utc)
+        if account_id is not None and not self._db.last_seen_email_time(
+                account_id, own_only=True):
+            # A mailbox with no history of its own is starting from the
+            # shared pre-upgrade point, which may be old: keep to the same
+            # bounded window a first scan uses.
+            point = max(point, now - timedelta(days=FIRST_SCAN_LOOKBACK_DAYS))
         # A stored time in the future (forged Date header, clock error) would
         # hide every later email, so never look from beyond "now".
-        return min(point, datetime.now(timezone.utc))
+        return min(point, now)
 
     def _back_check(self) -> None:
         """Startup sweep: unread + anything since we last ran."""
         self._emit(level="INFO", action="back_check",
                    message="Startup back-check for missed invoices...")
         with self._scan_lock:   # never overlap a catch-up sweep
-            self._poll(since=self._resume_point(), unread_only=False, back_check=True)
+            self._poll(since=None, unread_only=False, back_check=True)
 
     def _housekeeping(self) -> None:
         """Bounded-growth maintenance: prune the attachment cache and the log.
@@ -219,6 +245,8 @@ class Watcher:
               cancel: threading.Event | None = None) -> None:
         """One scan -> parse -> route cycle across every enabled mailbox.
 
+        ``since=None`` means "from where each mailbox left off"; a catch-up
+        sweep passes an explicit start instead.
         ``job_floor``/``job_ceiling`` are forwarded to the router (0 = off;
         only a catch-up sweep sets them). ``cancel`` is the flag to abort on -
         the shared ``_stop`` for a routine poll, the sweep's own flag for a
@@ -228,18 +256,31 @@ class Watcher:
         # Prefilter on the mailbox side so attachments no customer wants are
         # never transferred; per-customer filtering still happens in the router.
         allowed_ext = self._db.all_file_types()
+        if allowed_ext != self._ignored_ext or len(self._ignored_ids) > 20_000:
+            # Different file types are wanted now, so "nothing usable on this
+            # email" may no longer be true.
+            self._ignored_ids.clear()
+            self._ignored_ext = set(allowed_ext)
         # Already-handled mail is skipped before its attachments are fetched.
-        seen_ids = self._db.recent_processed_ids()
+        seen_ids = self._db.recent_processed_ids() | self._ignored_ids
 
-        messages = []
+        messages = []          # (email, mailbox id or None)
         for row, backend in account_backends(self._settings, self._db):
             label = (row["address"] if row and row["address"]
                      else "the configured mailbox")
+            account_id = row["id"] if row else None
             if cancel.is_set():
                 return
             try:
-                found = backend.fetch(since=since, unread_only=unread_only,
-                                      allowed_ext=allowed_ext, seen_ids=seen_ids)
+                start = since or self._resume_point(account_id)
+                if since is None and start and self._retry_from:
+                    start = min(start, min(self._retry_from.values())
+                                - timedelta(seconds=1))
+                found = backend.fetch(
+                    since=start,
+                    unread_only=unread_only,
+                    allowed_ext=allowed_ext, seen_ids=seen_ids)
+                self._ignored_ids.update(getattr(backend, "skipped_ids", ()))
             except Exception as exc:
                 # One broken mailbox must not stop the others being scanned.
                 log.exception("Mailbox %s failed", label)
@@ -250,12 +291,12 @@ class Watcher:
                 detail = getattr(backend, "last_scan", "") or "No new emails."
                 self._emit(level="INFO", action="poll",
                            message=f"[{label}] Nothing to process. {detail}")
-            messages.extend(found)
+            messages.extend((m, account_id) for m in found)
 
         if not messages:
             return
 
-        for msg in sorted(messages, key=lambda m: m.received_at):
+        for msg, account_id in sorted(messages, key=lambda pair: pair[0].received_at):
             if cancel.is_set():
                 return
             if self._db.is_email_processed(msg.message_id):
@@ -269,9 +310,14 @@ class Watcher:
                 groups = ([[a] for a in msg.attachments]
                           if len(msg.attachments) > 1 else [msg.attachments])
                 results = []
+                # A temporary AI outage is retried on a later poll; only the
+                # final attempt settles for the basic text reader's guess.
+                last_try = (self._fail_counts.get(msg.message_id, 0)
+                            >= _MAX_ATTEMPTS - 1)
                 for group in groups:
                     parsed = self._parser.parse(msg.subject, msg.body, group,
-                                                sender=msg.sender)
+                                                sender=msg.sender,
+                                                allow_fallback=last_try)
                     if parsed.ai_error:
                         self._emit(level="WARN", action="parse",
                                    message=f"AI parsing failed ({parsed.ai_error}); "
@@ -295,11 +341,13 @@ class Watcher:
                            message=f"'{msg.subject}' failed (attempt {fails}/"
                                    f"{_MAX_ATTEMPTS}): {exc}")
                 if fails < _MAX_ATTEMPTS:
+                    self._retry_from[msg.message_id] = msg.received_at
                     continue            # leave unprocessed: try again next poll
                 self._db.add_error(stage="parse", filename=msg.subject,
                                    error=f"Gave up after {fails} attempts: {exc}")
                 result = "error"
             self._fail_counts.pop(msg.message_id, None)
+            self._retry_from.pop(msg.message_id, None)
 
             if result == "out_of_range":
                 # Skipped only by a catch-up range: a later, wider scan (or
@@ -310,4 +358,5 @@ class Watcher:
                 received_at=msg.received_at.isoformat(),
                 subject=msg.subject,
                 result=result,
+                account_id=account_id,
             )

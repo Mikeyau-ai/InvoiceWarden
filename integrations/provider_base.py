@@ -42,6 +42,29 @@ class UploadContext:
         return self.doc_type == "credit"
 
 
+def supplier_matches(ctx: UploadContext, remote_id: str, remote_name: str) -> bool:
+    """True when a document found in the accounting system is this supplier's.
+
+    Invoice numbers are only unique per supplier, so a bill found by number
+    alone may belong to someone else. The supplier's stored accounting ID
+    decides when there is one; otherwise the names are compared loosely
+    (legal suffixes and punctuation ignored, one may extend the other). A
+    document that names no supplier at all cannot be judged and is accepted.
+    """
+    from core.database import normalise_name
+
+    remote_id, remote_name = (remote_id or "").strip(), (remote_name or "").strip()
+    if not remote_id and not remote_name:
+        return True
+    wanted_id = (ctx.customer_external_id or "").strip()
+    if wanted_id and remote_id:
+        return wanted_id.lower() == remote_id.lower()
+    ours, theirs = normalise_name(ctx.customer_name), normalise_name(remote_name)
+    if not ours or not theirs:
+        return False
+    return ours == theirs or ours.startswith(theirs + " ") or theirs.startswith(ours + " ")
+
+
 @dataclass
 class UploadResult:
     """Outcome returned to the router / logs."""

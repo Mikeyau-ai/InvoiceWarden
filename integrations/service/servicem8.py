@@ -79,14 +79,26 @@ class ServiceM8Provider(Provider):
         tried: list[str] = []
         for value in [ctx.job_number, *ctx.job_candidates]:
             value = (value or "").strip()
-            if not value or value in tried:
-                continue
-            tried.append(value)
+            if value and value not in tried:
+                tried.append(value)
+        self._tried = tried
+
+        # The labelled job number is the best evidence: test it every way.
+        labelled = (ctx.job_number or "").strip()
+        if labelled:
             for field in self.JOB_FIELDS:
+                uuid = self._lookup(field, labelled)
+                if uuid:
+                    return uuid, labelled
+        # The other candidates: the visible job number first for all of them,
+        # since that is by far the likeliest hit, then the rarer fields. Most
+        # invoices then resolve in one or two calls instead of three each.
+        others = [v for v in tried if v != labelled]
+        for field in self.JOB_FIELDS:
+            for value in others:
                 uuid = self._lookup(field, value)
                 if uuid:
                     return uuid, value
-        self._tried = tried
         return None, ""
 
     def upload_invoice(self, ctx: UploadContext) -> UploadResult:

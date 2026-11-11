@@ -24,7 +24,8 @@ import webbrowser
 
 import requests
 
-from integrations.provider_base import Provider, UploadContext, UploadResult
+from integrations.provider_base import (Provider, UploadContext, UploadResult,
+                                        supplier_matches)
 
 AUTH_URL = "https://secure.myob.com/oauth2/account/authorize"
 TOKEN_URL = "https://secure.myob.com/oauth2/v1/authorize"
@@ -155,14 +156,20 @@ class MyobProvider(Provider):
             find = self.http.get(f"{base}/Purchase/Bill/Item?$filter={flt}",
                                 headers=headers, timeout=25)
             find.raise_for_status()
-            items = find.json().get("Items", [])
+            # An invoice number is only unique per supplier: keep the bills
+            # that are this supplier's, so another's is never attached to.
+            items = [i for i in find.json().get("Items", [])
+                     if supplier_matches(ctx, (i.get("Supplier") or {}).get("UID", ""),
+                                         (i.get("Supplier") or {}).get("Name", ""))]
 
             if items:
                 bill_uid = items[0]["UID"]
             else:
                 label = "Credit note import" if credit else "Invoice import"
                 draft = {
-                    "Supplier": {"Name": ctx.customer_name},
+                    "Supplier": ({"UID": ctx.customer_external_id.strip()}
+                                 if (ctx.customer_external_id or "").strip()
+                                 else {"Name": ctx.customer_name}),
                     "Number": ctx.invoice_ref or None,
                     "Date": ctx.invoice_date or None,
                     "Lines": [{

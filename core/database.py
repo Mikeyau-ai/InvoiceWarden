@@ -7,6 +7,7 @@ dict-like ``sqlite3.Row`` objects.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -109,7 +110,8 @@ CREATE TABLE IF NOT EXISTS processed_emails (
     received_at TEXT NOT NULL DEFAULT '',
     processed_at TEXT NOT NULL,
     subject     TEXT NOT NULL DEFAULT '',
-    result      TEXT NOT NULL DEFAULT ''
+    result      TEXT NOT NULL DEFAULT '',
+    account_id  INTEGER                      -- mail_accounts.id; NULL = legacy
 );
 
 -- One row per (document, platform) that was successfully uploaded. Used to
@@ -140,6 +142,18 @@ _SEEN_ID_WINDOW = 5000
 
 #: Default cap for :meth:`Database.trim_activity_log`.
 ACTIVITY_LOG_KEEP = 20_000
+
+
+#: Legal-form words ignored when comparing supplier names, so "Acme Pty Ltd"
+#: and "ACME PTY. LIMITED" are recognised as the same business.
+_NAME_NOISE = {"pty", "ltd", "limited", "inc", "incorporated", "llc", "pl",
+               "corp", "corporation"}
+
+
+def normalise_name(name: str) -> str:
+    """Supplier name reduced to its comparable core (lower-case words only)."""
+    words = re.sub(r"[^a-z0-9]+", " ", (name or "").lower().replace("p/l", " ")).split()
+    return " ".join(w for w in words if w not in _NAME_NOISE)
 
 
 def _utcnow() -> str:
@@ -175,6 +189,8 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL;")
+            # Safe under WAL and avoids a disk flush for every log line.
+            self._conn.execute("PRAGMA synchronous=NORMAL;")
             self._conn.execute("PRAGMA foreign_keys=ON;")
             self._conn.executescript(SCHEMA)
             self._conn.commit()
@@ -202,6 +218,15 @@ class Database:
                 self._conn.execute("ALTER TABLE customers ADD COLUMN "
                                    "reviewed INTEGER NOT NULL DEFAULT 1")
                 self._conn.commit()
+            mails = {r["name"] for r in
+                     self._conn.execute("PRAGMA table_info(processed_emails)")}
+            if "account_id" not in mails:
+                self._conn.execute("ALTER TABLE processed_emails ADD COLUMN "
+                                   "account_id INTEGER")
+            # Created here, not in SCHEMA: the column may only just exist.
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_procmail_received "
+                               "ON processed_emails(account_id, received_at)")
+            self._conn.commit()
 
     # -- low level helpers -------------------------------------------------
     def _exec(self, sql: str, params: Iterable[Any] = ()):
@@ -351,7 +376,19 @@ class Database:
             "WHERE a.alias = ? COLLATE NOCASE LIMIT 1",
             (name_norm,),
         )
-        return rows[0] if rows else None
+        if rows:
+            return rows[0]
+        # Last resort: the same name written differently ("Acme Pty Ltd" vs
+        # "ACME PTY. LIMITED"). Only reached on a miss, and the supplier list
+        # is small, so a scan is fine.
+        want = normalise_name(name_norm)
+        if not want:
+            return None
+        for row in self._query("SELECT * FROM customers ORDER BY id"):
+            names = [row["name"], *self._decode_aliases(row["aliases"])]
+            if any(normalise_name(n) == want for n in names):
+                return row
+        return None
 
     def upsert_customer(self, data: dict[str, Any]) -> int:
         """Insert or update a customer profile. ``data`` may contain ``id``."""
@@ -473,6 +510,11 @@ class Database:
             if path:
                 out.add(str(path))
         return out
+
+    def update_error(self, eid: int, error: str, payload: str) -> None:
+        """Replace the message and retry snapshot on an existing error row."""
+        self._exec("UPDATE error_log SET error=?, payload=? WHERE id=?",
+                   (error, payload, eid))
 
     def mark_error_resolved(self, eid: int) -> None:
         """Flag one error row as dealt with."""
@@ -604,12 +646,14 @@ class Database:
             "SELECT message_id FROM processed_emails ORDER BY id DESC LIMIT ?", (limit,))}
 
     def mark_email_processed(self, message_id: str, received_at: str,
-                             subject: str, result: str) -> None:
-        """Record that one email has been handled."""
+                             subject: str, result: str,
+                             account_id: int | None = None) -> None:
+        """Record that one email has been handled, and by which mailbox."""
         self._exec(
-            "INSERT OR IGNORE INTO processed_emails(message_id,received_at,processed_at,subject,result) "
-            "VALUES(?,?,?,?,?)",
-            (message_id, received_at, _utcnow(), subject, result),
+            "INSERT OR IGNORE INTO processed_emails"
+            "(message_id,received_at,processed_at,subject,result,account_id) "
+            "VALUES(?,?,?,?,?,?)",
+            (message_id, received_at, _utcnow(), subject, result, account_id),
         )
 
     # -- per-document dedupe -------------------------------------
@@ -680,9 +724,24 @@ class Database:
             return rows[0]["job_number"], "most recent invoice for this customer"
         return "", ""
 
-    def last_seen_email_time(self) -> str | None:
-        """Received timestamp of the newest handled email, or None."""
-        rows = self._query("SELECT MAX(received_at) AS m FROM processed_emails")
+    def last_seen_email_time(self, account_id: int | None = None,
+                             own_only: bool = False) -> str | None:
+        """Received timestamp of the newest handled email, or None.
+
+        With ``account_id`` only that mailbox's own emails count (plus rows
+        from before mailboxes were tracked, unless ``own_only``), so one
+        mailbox being down does not let another's newer mail hide its backlog.
+        """
+        if account_id is None:
+            rows = self._query("SELECT MAX(received_at) AS m FROM processed_emails")
+        elif own_only:
+            rows = self._query(
+                "SELECT MAX(received_at) AS m FROM processed_emails "
+                "WHERE account_id=?", (account_id,))
+        else:
+            rows = self._query(
+                "SELECT MAX(received_at) AS m FROM processed_emails "
+                "WHERE account_id=? OR account_id IS NULL", (account_id,))
         return rows[0]["m"] if rows and rows[0]["m"] else None
 
     def close(self) -> None:
