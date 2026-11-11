@@ -17,6 +17,7 @@ Standard library only (imaplib + email); adds no dependency.
 from __future__ import annotations
 
 import email
+import hashlib
 import imaplib
 import logging
 import re
@@ -26,13 +27,14 @@ from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
-from config import ATTACHMENT_CACHE
 from integrations.email_outlook import (
     FIRST_SCAN_LOOKBACK_DAYS,
     EmailMessage,
     OutlookBackend,
     _ext_of,
     _safe,
+    cache_bucket,
+    unique_name,
 )
 
 log = logging.getLogger(__name__)
@@ -43,6 +45,10 @@ _HEADER_BATCH = 200
 
 #: Upper bound on how many search hits a single fetch considers (newest first).
 _SEARCH_CAP = 500
+
+#: Seconds before a silent server is given up on. Without one a stalled
+#: connection blocked the watcher (and every other mailbox) indefinitely.
+_TIMEOUT = 30
 
 #: Friendly presets so users do not have to look up server names.
 IMAP_PRESETS: dict[str, tuple[str, int]] = {
@@ -78,6 +84,7 @@ class ImapBackend(OutlookBackend):
         self._folder = (folder or "").strip() or "INBOX"
         self._ssl = use_ssl
         self.last_scan = ""
+        self.skipped_ids = []
 
     def _connect(self):
         """Open and authenticate an IMAP connection, with actionable errors."""
@@ -91,9 +98,10 @@ class ImapBackend(OutlookBackend):
                 # imaplib's default context does NOT verify the server
                 # certificate or hostname, so pass a verifying one explicitly.
                 conn = imaplib.IMAP4_SSL(self._host, self._port,
-                                         ssl_context=ssl.create_default_context())
+                                         ssl_context=ssl.create_default_context(),
+                                         timeout=_TIMEOUT)
             else:
-                conn = imaplib.IMAP4(self._host, self._port)
+                conn = imaplib.IMAP4(self._host, self._port, timeout=_TIMEOUT)
         except Exception as exc:
             raise RuntimeError(
                 f"Could not reach {self._host}:{self._port} - {exc}") from exc
@@ -211,7 +219,15 @@ class ImapBackend(OutlookBackend):
                 if received <= floor:
                     older += 1
                     continue
-                msg_id = (head.get("Message-ID") or f"uid-{seq.decode()}").strip()
+                msg_id = (head.get("Message-ID") or "").strip()
+                if not msg_id:
+                    # No Message-ID: derive a stable id from the headers. The
+                    # sequence number is reused after deletions, so it could
+                    # make a new email look already processed.
+                    basis = "|".join(str(head.get(h) or "")
+                                     for h in ("Date", "From", "Subject"))
+                    msg_id = "noid-" + hashlib.sha1(
+                        basis.encode("utf-8", "replace")).hexdigest()
                 if msg_id in seen_ids:
                     already += 1
                     continue
@@ -220,16 +236,18 @@ class ImapBackend(OutlookBackend):
             # Pass 2 - full body, only for what survived.
             no_attach = 0
             results: list[EmailMessage] = []
+            self.skipped_ids = []
             for seq, msg_id, received in wanted:
                 # BODY.PEEK so reading does not flag the message as seen.
                 typ, raw = conn.fetch(seq, "(BODY.PEEK[])")
                 if typ != "OK" or not raw or not raw[0]:
                     continue
                 msg = email.message_from_bytes(raw[0][1])
-                saved = self._save_attachments(msg, seq, allowed_ext,
+                saved = self._save_attachments(msg, msg_id, allowed_ext,
                                                write=not headers_only)
                 if not saved:
                     no_attach += 1
+                    self.skipped_ids.append(msg_id)
                     continue
 
                 results.append(EmailMessage(
@@ -294,7 +312,7 @@ class ImapBackend(OutlookBackend):
         return ""
 
     @staticmethod
-    def _save_attachments(msg, uid: bytes, allowed_ext: set[str],
+    def _save_attachments(msg, msg_id: str, allowed_ext: set[str],
                           write: bool = True) -> list[Path]:
         """Write file attachments to the cache, one sub-folder per message.
 
@@ -303,8 +321,10 @@ class ImapBackend(OutlookBackend):
         headers-only probe used by the "Test mailbox" button.
         """
         out: list[Path] = []
-        digits = "".join(ch for ch in uid.decode(errors="replace") if ch.isdigit())
-        bucket = ATTACHMENT_CACHE / f"imap-{digits or '0'}"
+        used: set[str] = set()
+        # Keyed on the message id, not the sequence number: sequence numbers
+        # are reused after deletions, which mixed up different emails' files.
+        bucket = cache_bucket(msg_id)
         for part in msg.walk():
             filename = part.get_filename()
             if not filename:
@@ -318,7 +338,7 @@ class ImapBackend(OutlookBackend):
                 continue
             if not payload:
                 continue
-            dest = bucket / fname
+            dest = bucket / unique_name(fname, used)
             if write:
                 bucket.mkdir(parents=True, exist_ok=True)
                 # Identical bytes already cached: keep the path, skip the write.

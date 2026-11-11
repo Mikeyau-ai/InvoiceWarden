@@ -46,6 +46,17 @@ code). Status: **FIXED** (in working tree, not committed/released) or **OPEN**.
 - Missing tests: provider HTTP clients beyond the above, email backend parsing, GUI.
 - Licensing: no LICENSE/NOTICE file shipped with the exe for bundled third-party code (see audit report).
 
-## Fixed after 1.0.43 (committed, not yet released)
+## Fixed in 1.0.45 (code review 2026-11-11; tests in `tests/test_review_fixes.py`)
+- Attachment cache folder was the first 24 chars of the message id, which is the same for every message in an Outlook/Graph mailbox: same-named files overwrote each other and the cache was never pruned. Now a hash of the whole id (`email_outlook.cache_bucket`); IMAP no longer keys on sequence numbers.
+- Graph ignored the 14-day first-scan limit; Graph `$expand=attachments` re-downloaded handled mail every poll; sub-folder display names never resolved.
+- Error-retry payload lost `doc_type`/`job_candidates`; a failed retry added a new error row.
+- Xero/MYOB matched bills by number only (now supplier-scoped; the stored accounting contact ID is used).
+- IMAP had no socket timeout.
+- Per-mailbox resume point (`processed_emails.account_id`); a failed email is kept inside the scan window until retried.
+- Providers cached per Router (token/session reuse); ServiceM8 lookup order; transient AI failures retried before the regex fallback; normalised supplier-name matching.
+
+Still open from the list below: sender allowlist, UNIQUE on `processed_documents`, QuickBooks bill link, ServiceM8 orphan attachment record, dead new-customer modal code, settings dialog items, release hardening, GUI tests.
+
+## Fixed after 1.0.43 (released in 1.0.44)
 - F26: multi-attachment emails are parsed and routed per attachment (`watcher._poll`).
 - F27: `THIRD_PARTY_NOTICES.md` added and bundled into the exe via `InvoiceWarden.spec`. The project's own LICENSE is still the owner's decision.

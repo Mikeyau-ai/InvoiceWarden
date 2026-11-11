@@ -13,7 +13,8 @@ import webbrowser
 
 import requests
 
-from integrations.provider_base import Provider, UploadContext, UploadResult
+from integrations.provider_base import (Provider, UploadContext, UploadResult,
+                                        supplier_matches)
 
 AUTH_URL = "https://login.xero.com/identity/connect/authorize"
 TOKEN_URL = "https://identity.xero.com/connect/token"
@@ -97,6 +98,19 @@ class XeroProvider(Provider):
         except requests.RequestException as exc:
             return UploadResult(False, self.label, f"Xero error: {exc}")
 
+    @staticmethod
+    def _contact(ctx: UploadContext) -> dict:
+        """Xero contact reference: the stored contact ID if set, else the name."""
+        ext = (ctx.customer_external_id or "").strip()
+        return {"ContactID": ext} if ext else {"Name": ctx.customer_name}
+
+    @staticmethod
+    def _own(docs: list, ctx: UploadContext) -> list:
+        """Only the documents that belong to this invoice's supplier."""
+        return [d for d in docs if supplier_matches(
+            ctx, (d.get("Contact") or {}).get("ContactID", ""),
+            (d.get("Contact") or {}).get("Name", ""))]
+
     def upload_invoice(self, ctx: UploadContext) -> UploadResult:
         """Find or draft the matching AP document, then attach the file to it."""
         ref = (ctx.invoice_ref or "").strip()
@@ -120,13 +134,13 @@ class XeroProvider(Provider):
                     f'Type=="ACCPAYCREDIT" AND CreditNoteNumber=="{ref}"')
                 found = self.http.get(f"{API}/CreditNotes?where={where}", headers=headers, timeout=25)
                 found.raise_for_status()
-                existing = found.json().get("CreditNotes", [])
+                existing = self._own(found.json().get("CreditNotes", []), ctx)
                 if existing:
                     doc_id = existing[0]["CreditNoteID"]
                 else:
                     body = {"CreditNotes": [{
                         "Type": "ACCPAYCREDIT",
-                        "Contact": {"Name": ctx.customer_name},
+                        "Contact": self._contact(ctx),
                         "CreditNoteNumber": ctx.invoice_ref or None,
                         "Date": ctx.invoice_date or None,
                         "LineItems": [{
@@ -147,13 +161,13 @@ class XeroProvider(Provider):
                     f'Type=="ACCPAY" AND InvoiceNumber=="{ref}"')
                 found = self.http.get(f"{API}/Invoices?where={where}", headers=headers, timeout=25)
                 found.raise_for_status()
-                invoices = found.json().get("Invoices", [])
+                invoices = self._own(found.json().get("Invoices", []), ctx)
                 if invoices:
                     doc_id = invoices[0]["InvoiceID"]
                 else:
                     body = {"Invoices": [{
                         "Type": "ACCPAY",
-                        "Contact": {"Name": ctx.customer_name},
+                        "Contact": self._contact(ctx),
                         "InvoiceNumber": ctx.invoice_ref or None,
                         "Date": ctx.invoice_date or None,
                         "LineItems": [{

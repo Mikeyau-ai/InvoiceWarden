@@ -129,6 +129,23 @@ class ParseResult:
 #: archives) would only ever return an empty string, so it is never opened.
 _TEXT_EXTRACTABLE = {"pdf", "docx", "csv", "txt"}
 
+#: How many pages of a PDF are read for text.
+_PDF_MAX_PAGES = 5
+
+
+class AITransientError(Exception):
+    """The AI call failed in a way that is worth trying again later
+    (timeout, no connection, rate limit, server error)."""
+
+
+def _is_transient(exc: Exception) -> bool:
+    """True for a failure a later attempt could plausibly get past."""
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+    resp = getattr(exc, "response", None)
+    code = getattr(resp, "status_code", None)
+    return isinstance(exc, requests.HTTPError) and (code == 429 or (code or 0) >= 500)
+
 
 def extract_text(path: Path, limit: int = 12000) -> str:
     """Best-effort plain-text extraction from a single attachment."""
@@ -136,11 +153,19 @@ def extract_text(path: Path, limit: int = 12000) -> str:
     try:
         if ext == "pdf":
             from pdfminer.high_level import extract_text as pdf_extract
-            return (pdf_extract(str(path)) or "")[:limit]
+            # The reference numbers are on the first pages; parsing a long
+            # document in full only to truncate it is wasted work.
+            return (pdf_extract(str(path), maxpages=_PDF_MAX_PAGES) or "")[:limit]
         if ext == "docx":
             import docx
             doc = docx.Document(str(path))
-            return "\n".join(p.text for p in doc.paragraphs)[:limit]
+            lines = [p.text for p in doc.paragraphs]
+            # Word invoices keep their numbers and totals in tables, which
+            # ``paragraphs`` does not include.
+            for table in doc.tables:
+                for row in table.rows:
+                    lines.append("  ".join(c.text.strip() for c in row.cells))
+            return "\n".join(lines)[:limit]
         if ext in ("csv", "txt"):
             return path.read_text(errors="ignore")[:limit]
     except Exception as exc:
@@ -171,7 +196,7 @@ AI_PROVIDERS: dict[str, dict] = {
     "anthropic": {
         "label": "Anthropic (Claude)",
         "key_setting": "ai.anthropic_api_key",
-        "default_model": "claude-sonnet-5",
+        "default_model": "claude-sonnet-5-5",
         "needs_key": True,
         "needs_base_url": False,
     },
@@ -316,7 +341,7 @@ def _call_anthropic(api_key: str, model: str, prompt: str) -> str:
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
     }, {
-        "model": model or "claude-sonnet-5",
+        "model": model or "claude-sonnet-5-5",
         "max_tokens": 1024,
         "messages": [{"role": "user", "content": prompt}],
     })
@@ -662,8 +687,13 @@ class InvoiceParser:
         self._settings = settings
 
     def parse(self, subject: str, body: str, attachments: list[Path],
-              sender: str = "") -> ParseResult:
-        """Run extraction over one email + its attachments."""
+              sender: str = "", allow_fallback: bool = True) -> ParseResult:
+        """Run extraction over one email + its attachments.
+
+        With ``allow_fallback=False`` a temporary AI failure raises
+        :class:`AITransientError` instead of dropping to the regex reader, so
+        the caller can try the email again later with the AI working.
+        """
         # Only bother extracting from formats the extractor actually handles -
         # images and unknown types always come back empty.
         attachment_text = "\n\n".join(
@@ -697,6 +727,10 @@ class InvoiceParser:
                     )
                 ai_error = "the AI returned no usable JSON"
             except Exception as exc:
+                if not allow_fallback and _is_transient(exc):
+                    raise AITransientError(
+                        f"AI service temporarily unavailable: "
+                        f"{str(exc)[:200] or type(exc).__name__}") from exc
                 log.error("AI parse failed (%s); using regex fallback: %s", provider, exc)
                 ai_error = str(exc)[:200] or type(exc).__name__
 
